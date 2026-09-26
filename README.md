@@ -23,8 +23,8 @@ AMMs are the base layer of DeFi: most DEXs, lending liquidations and on-chain pr
 |---|---|---|
 | 1 | Contract skeleton: token pair, reserves, LP token | ✅ Done |
 | 2 | `addLiquidity` | ✅ Done |
-| 3 | `removeLiquidity` | ⏳ Next |
-| 4 | `swap` with 0.3% fee + `getAmountOut` | |
+| 3 | `removeLiquidity` | ✅ Done |
+| 4 | `swap` with 0.3% fee + `getAmountOut` | ⏳ Next |
 | 5 | Slippage protection (`minOut`), `ReentrancyGuard`, full events | |
 | 6 | Test suite: unit, fuzz, and invariant (`k` never decreases) | |
 | 7 | Sepolia deployment | |

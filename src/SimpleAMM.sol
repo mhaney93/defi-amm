@@ -16,8 +16,10 @@ contract SimpleAMM is ERC20 {
     error ZeroAddress();
     error ZeroAmount();
     error InsufficientLiquidityMinted();
+    error InsufficientLiquidityBurned();
 
     event LiquidityAdded(address indexed provider, uint256 amount0, uint256 amount1, uint256 liquidity);
+    event LiquidityRemoved(address indexed provider, uint256 amount0, uint256 amount1, uint256 liquidity);
 
     /// @notice LP shares locked forever on the first deposit, so total supply can never
     ///         return to zero and the first depositor can't inflate the share price.
@@ -90,5 +92,35 @@ contract SimpleAMM is ERC20 {
         token1.safeTransferFrom(msg.sender, address(this), amount1);
 
         emit LiquidityAdded(msg.sender, amount0, amount1, liquidity);
+    }
+
+    /// @notice Burn LP shares and withdraw the matching share of both reserves.
+    /// @dev Payout is pro rata: amount = liquidity * reserve / totalSupply, for each token.
+    ///      Slippage limits and a reentrancy guard come in a later milestone.
+    /// @param liquidity LP shares to burn from the caller.
+    /// @return amount0 Amount of token0 sent to the caller.
+    /// @return amount1 Amount of token1 sent to the caller.
+    function removeLiquidity(uint256 liquidity) external returns (uint256 amount0, uint256 amount1) {
+        if (liquidity == 0) revert ZeroAmount();
+
+        uint256 _reserve0 = reserve0;
+        uint256 _reserve1 = reserve1;
+        uint256 supply = totalSupply();
+
+        // Integer division rounds down, so dust stays in the pool rather than leaking out.
+        amount0 = (liquidity * _reserve0) / supply;
+        amount1 = (liquidity * _reserve1) / supply;
+        if (amount0 == 0 || amount1 == 0) revert InsufficientLiquidityBurned();
+
+        // Effects before interactions: burn shares and shrink reserves, then send tokens.
+        // _burn reverts if the caller holds fewer than `liquidity` shares.
+        _burn(msg.sender, liquidity);
+        reserve0 = _reserve0 - amount0;
+        reserve1 = _reserve1 - amount1;
+
+        token0.safeTransfer(msg.sender, amount0);
+        token1.safeTransfer(msg.sender, amount1);
+
+        emit LiquidityRemoved(msg.sender, amount0, amount1, liquidity);
     }
 }
