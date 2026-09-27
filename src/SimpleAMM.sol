@@ -5,11 +5,14 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 
 /// @title SimpleAMM
 /// @notice Constant-product (x * y = k) AMM for a single token pair.
 ///         The pool contract is itself the ERC20 LP token.
-contract SimpleAMM is ERC20 {
+/// @dev Every state-changing function is nonReentrant. The lock lives in transient storage
+///      (EIP-1153), so it costs far less gas than a storage flag and clears itself after each tx.
+contract SimpleAMM is ERC20, ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
 
     error IdenticalTokens();
@@ -20,6 +23,8 @@ contract SimpleAMM is ERC20 {
     error InvalidToken();
     error InsufficientLiquidity();
     error InsufficientOutputAmount();
+    error InsufficientAmount0();
+    error InsufficientAmount1();
 
     event LiquidityAdded(address indexed provider, uint256 amount0, uint256 amount1, uint256 liquidity);
     event LiquidityRemoved(address indexed provider, uint256 amount0, uint256 amount1, uint256 liquidity);
@@ -53,14 +58,17 @@ contract SimpleAMM is ERC20 {
     /// @notice Deposit both tokens and receive LP shares.
     /// @dev After the first deposit, only the amounts that match the current reserve ratio
     ///      are pulled, so the caller is never charged for the excess of either token.
-    ///      Slippage limits and a reentrancy guard come in a later milestone.
+    ///      The min amounts protect the caller if the ratio moves before the tx lands.
     /// @param amount0Desired Max amount of token0 the caller is willing to deposit.
     /// @param amount1Desired Max amount of token1 the caller is willing to deposit.
+    /// @param amount0Min Revert if less than this much token0 would be deposited.
+    /// @param amount1Min Revert if less than this much token1 would be deposited.
     /// @return amount0 Amount of token0 actually deposited.
     /// @return amount1 Amount of token1 actually deposited.
     /// @return liquidity LP shares minted to the caller.
-    function addLiquidity(uint256 amount0Desired, uint256 amount1Desired)
+    function addLiquidity(uint256 amount0Desired, uint256 amount1Desired, uint256 amount0Min, uint256 amount1Min)
         external
+        nonReentrant
         returns (uint256 amount0, uint256 amount1, uint256 liquidity)
     {
         if (amount0Desired == 0 || amount1Desired == 0) revert ZeroAmount();
@@ -91,6 +99,9 @@ contract SimpleAMM is ERC20 {
             if (liquidity == 0) revert InsufficientLiquidityMinted();
         }
 
+        if (amount0 < amount0Min) revert InsufficientAmount0();
+        if (amount1 < amount1Min) revert InsufficientAmount1();
+
         // Effects before interactions: update state, then pull tokens.
         reserve0 = _reserve0 + amount0;
         reserve1 = _reserve1 + amount1;
@@ -104,11 +115,17 @@ contract SimpleAMM is ERC20 {
 
     /// @notice Burn LP shares and withdraw the matching share of both reserves.
     /// @dev Payout is pro rata: amount = liquidity * reserve / totalSupply, for each token.
-    ///      Slippage limits and a reentrancy guard come in a later milestone.
+    ///      The min amounts protect the caller if reserves shift before the tx lands.
     /// @param liquidity LP shares to burn from the caller.
+    /// @param amount0Min Revert if less than this much token0 would be paid out.
+    /// @param amount1Min Revert if less than this much token1 would be paid out.
     /// @return amount0 Amount of token0 sent to the caller.
     /// @return amount1 Amount of token1 sent to the caller.
-    function removeLiquidity(uint256 liquidity) external returns (uint256 amount0, uint256 amount1) {
+    function removeLiquidity(uint256 liquidity, uint256 amount0Min, uint256 amount1Min)
+        external
+        nonReentrant
+        returns (uint256 amount0, uint256 amount1)
+    {
         if (liquidity == 0) revert ZeroAmount();
 
         uint256 _reserve0 = reserve0;
@@ -119,6 +136,8 @@ contract SimpleAMM is ERC20 {
         amount0 = (liquidity * _reserve0) / supply;
         amount1 = (liquidity * _reserve1) / supply;
         if (amount0 == 0 || amount1 == 0) revert InsufficientLiquidityBurned();
+        if (amount0 < amount0Min) revert InsufficientAmount0();
+        if (amount1 < amount1Min) revert InsufficientAmount1();
 
         // Effects before interactions: burn shares and shrink reserves, then send tokens.
         // _burn reverts if the caller holds fewer than `liquidity` shares.
@@ -134,11 +153,16 @@ contract SimpleAMM is ERC20 {
 
     /// @notice Swap an exact amount of one pool token for as much of the other as the curve allows.
     /// @dev The 0.3% fee stays in the pool, so k grows with every trade and LPs earn it pro rata.
-    ///      Slippage limits (minAmountOut) and a reentrancy guard come in a later milestone.
+    ///      minAmountOut caps slippage, so a sandwich or a stale quote can't fill the trade at a bad price.
     /// @param tokenIn Address of the token being sold; must be token0 or token1.
     /// @param amountIn Exact amount of tokenIn the caller sends.
+    /// @param minAmountOut Revert if the output would be less than this.
     /// @return amountOut Amount of the other token sent to the caller.
-    function swap(address tokenIn, uint256 amountIn) external returns (uint256 amountOut) {
+    function swap(address tokenIn, uint256 amountIn, uint256 minAmountOut)
+        external
+        nonReentrant
+        returns (uint256 amountOut)
+    {
         if (amountIn == 0) revert ZeroAmount();
 
         bool zeroForOne;
@@ -147,7 +171,7 @@ contract SimpleAMM is ERC20 {
 
         (uint256 reserveIn, uint256 reserveOut) = zeroForOne ? (reserve0, reserve1) : (reserve1, reserve0);
         amountOut = getAmountOut(amountIn, reserveIn, reserveOut);
-        if (amountOut == 0) revert InsufficientOutputAmount();
+        if (amountOut == 0 || amountOut < minAmountOut) revert InsufficientOutputAmount();
 
         // Effects before interactions: the full amountIn (fee included) joins the reserves.
         if (zeroForOne) {

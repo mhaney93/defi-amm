@@ -15,6 +15,9 @@ AMMs are the base layer of DeFi: most DEXs, lending liquidations and on-chain pr
 - **Inflation-attack guard.** The first 1,000 shares (`MINIMUM_LIQUIDITY`) are minted to `0x…dEaD` and locked forever, so the total supply can never drop back to zero and the first depositor can't manipulate the share price.
 - **Ratio-matched deposits.** Later deposits pull only the amounts that match the current reserve ratio, so the caller is never charged for excess tokens.
 - **Rounding favors the pool.** New shares are `min(amount0 * supply / reserve0, amount1 * supply / reserve1)`.
+- **Swaps with a 0.3% fee.** `swap` sells an exact input for the other token. The fee stays in the pool, so `k` grows with every trade and LPs earn it pro rata.
+- **Slippage limits.** `addLiquidity` and `removeLiquidity` take min amounts for each token, and `swap` takes `minAmountOut`. If the price moves before the tx lands, it reverts instead of filling at a worse rate.
+- **Reentrancy guard.** Every state-changing function is `nonReentrant`, using OpenZeppelin's `ReentrancyGuardTransient` (the lock lives in EIP-1153 transient storage, so it's cheap and clears itself after each tx).
 - **Checks-effects-interactions.** Reserves and shares update before any token transfer, and transfers use `SafeERC20`.
 
 ## Roadmap
@@ -25,8 +28,8 @@ AMMs are the base layer of DeFi: most DEXs, lending liquidations and on-chain pr
 | 2 | `addLiquidity` | ✅ Done |
 | 3 | `removeLiquidity` | ✅ Done |
 | 4 | `swap` with 0.3% fee + `getAmountOut` | ✅ Done |
-| 5 | Slippage protection (`minOut`), `ReentrancyGuard`, full events | ⏳ Next |
-| 6 | Test suite: unit, fuzz, and invariant (`k` never decreases) | |
+| 5 | Slippage protection (`minOut`), `ReentrancyGuard`, full events | ✅ Done |
+| 6 | Test suite: unit, fuzz, and invariant (`k` never decreases) | ⏳ Next |
 | 7 | Sepolia deployment | |
 
 ## How to run
