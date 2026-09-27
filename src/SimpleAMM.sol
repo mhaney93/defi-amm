@@ -17,9 +17,17 @@ contract SimpleAMM is ERC20 {
     error ZeroAmount();
     error InsufficientLiquidityMinted();
     error InsufficientLiquidityBurned();
+    error InvalidToken();
+    error InsufficientLiquidity();
+    error InsufficientOutputAmount();
 
     event LiquidityAdded(address indexed provider, uint256 amount0, uint256 amount1, uint256 liquidity);
     event LiquidityRemoved(address indexed provider, uint256 amount0, uint256 amount1, uint256 liquidity);
+    event Swap(address indexed trader, address indexed tokenIn, uint256 amountIn, uint256 amountOut);
+
+    /// @notice Swap fee is 0.3%, expressed as 997/1000 of the input going into the curve.
+    uint256 public constant FEE_NUMERATOR = 997;
+    uint256 public constant FEE_DENOMINATOR = 1000;
 
     /// @notice LP shares locked forever on the first deposit, so total supply can never
     ///         return to zero and the first depositor can't inflate the share price.
@@ -122,5 +130,54 @@ contract SimpleAMM is ERC20 {
         token1.safeTransfer(msg.sender, amount1);
 
         emit LiquidityRemoved(msg.sender, amount0, amount1, liquidity);
+    }
+
+    /// @notice Swap an exact amount of one pool token for as much of the other as the curve allows.
+    /// @dev The 0.3% fee stays in the pool, so k grows with every trade and LPs earn it pro rata.
+    ///      Slippage limits (minAmountOut) and a reentrancy guard come in a later milestone.
+    /// @param tokenIn Address of the token being sold; must be token0 or token1.
+    /// @param amountIn Exact amount of tokenIn the caller sends.
+    /// @return amountOut Amount of the other token sent to the caller.
+    function swap(address tokenIn, uint256 amountIn) external returns (uint256 amountOut) {
+        if (amountIn == 0) revert ZeroAmount();
+
+        bool zeroForOne;
+        if (tokenIn == address(token0)) zeroForOne = true;
+        else if (tokenIn != address(token1)) revert InvalidToken();
+
+        (uint256 reserveIn, uint256 reserveOut) = zeroForOne ? (reserve0, reserve1) : (reserve1, reserve0);
+        amountOut = getAmountOut(amountIn, reserveIn, reserveOut);
+        if (amountOut == 0) revert InsufficientOutputAmount();
+
+        // Effects before interactions: the full amountIn (fee included) joins the reserves.
+        if (zeroForOne) {
+            reserve0 = reserveIn + amountIn;
+            reserve1 = reserveOut - amountOut;
+            token0.safeTransferFrom(msg.sender, address(this), amountIn);
+            token1.safeTransfer(msg.sender, amountOut);
+        } else {
+            reserve1 = reserveIn + amountIn;
+            reserve0 = reserveOut - amountOut;
+            token1.safeTransferFrom(msg.sender, address(this), amountIn);
+            token0.safeTransfer(msg.sender, amountOut);
+        }
+
+        emit Swap(msg.sender, tokenIn, amountIn, amountOut);
+    }
+
+    /// @notice Quote how much comes out for a given input, after the 0.3% fee.
+    /// @dev From (reserveIn + amountInWithFee) * (reserveOut - amountOut) = reserveIn * reserveOut:
+    ///      amountOut = amountInWithFee * reserveOut / (reserveIn + amountInWithFee).
+    ///      Integer division rounds down, so the trader never gets more than the curve allows.
+    function getAmountOut(uint256 amountIn, uint256 reserveIn, uint256 reserveOut)
+        public
+        pure
+        returns (uint256 amountOut)
+    {
+        if (amountIn == 0) revert ZeroAmount();
+        if (reserveIn == 0 || reserveOut == 0) revert InsufficientLiquidity();
+
+        uint256 amountInWithFee = amountIn * FEE_NUMERATOR;
+        amountOut = (amountInWithFee * reserveOut) / (reserveIn * FEE_DENOMINATOR + amountInWithFee);
     }
 }
