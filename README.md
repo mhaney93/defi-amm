@@ -29,7 +29,7 @@ AMMs are the base layer of DeFi: most DEXs, lending liquidations and on-chain pr
 | 3 | `removeLiquidity` | ✅ Done |
 | 4 | `swap` with 0.3% fee + `getAmountOut` | ✅ Done |
 | 5 | Slippage protection (`minOut`), `ReentrancyGuard`, full events | ✅ Done |
-| 6 | Test suite: unit, fuzz, and invariant (`k` never decreases) | ⏳ Next |
+| 6 | Test suite: unit, fuzz, and invariant (`k` never decreases) | 🚧 In progress (liquidity unit tests done) |
 | 7 | Sepolia deployment | |
 
 ## How to run
