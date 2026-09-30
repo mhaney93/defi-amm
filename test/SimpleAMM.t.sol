@@ -9,7 +9,7 @@ import {MockERC20} from "./mocks/MockERC20.sol";
 import {ReentrantToken} from "./mocks/ReentrantToken.sol";
 
 /// @notice Unit tests for the constructor, liquidity, swap and getAmountOut.
-///         Fuzz and invariant tests come in a later commit.
+///         Fuzz tests live in SimpleAMM.fuzz.t.sol, invariants in test/invariant/.
 contract SimpleAMMTest is Test {
     event LiquidityAdded(address indexed provider, uint256 amount0, uint256 amount1, uint256 liquidity);
     event LiquidityRemoved(address indexed provider, uint256 amount0, uint256 amount1, uint256 liquidity);

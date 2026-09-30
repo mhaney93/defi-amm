@@ -29,8 +29,8 @@ AMMs are the base layer of DeFi: most DEXs, lending liquidations and on-chain pr
 | 3 | `removeLiquidity` | ✅ Done |
 | 4 | `swap` with 0.3% fee + `getAmountOut` | ✅ Done |
 | 5 | Slippage protection (`minOut`), `ReentrancyGuard`, full events | ✅ Done |
-| 6 | Test suite: unit, fuzz, and invariant (`k` never decreases) | 🚧 In progress (liquidity, swap and reentrancy tests done; fuzz + invariant next) |
-| 7 | Sepolia deployment | |
+| 6 | Test suite: unit, fuzz, and invariant (`k` never decreases) | ✅ Done (44 tests: unit, reentrancy, fuzz, and handler-based invariants) |
+| 7 | Sepolia deployment | ⏭️ Next |
 
 ## How to run
 
@@ -40,7 +40,7 @@ Requires [Foundry](https://getfoundry.sh/).
 git clone --recurse-submodules https://github.com/mhaney93/defi-amm.git
 cd defi-amm
 forge build
-forge test   # the test suite arrives in milestone 6
+forge test   # 44 tests; add -vv to see the invariant call counts
 ```
 
 ## Stack
