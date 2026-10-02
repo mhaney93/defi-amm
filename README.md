@@ -30,7 +30,7 @@ AMMs are the base layer of DeFi: most DEXs, lending liquidations and on-chain pr
 | 4 | `swap` with 0.3% fee + `getAmountOut` | ✅ Done |
 | 5 | Slippage protection (`minOut`), `ReentrancyGuard`, full events | ✅ Done |
 | 6 | Test suite: unit, fuzz, and invariant (`k` never decreases) | ✅ Done (44 tests: unit, reentrancy, fuzz, and handler-based invariants) |
-| 7 | Sepolia deployment | ⏭️ Next |
+| 7 | Sepolia deployment | 🔨 In progress (deploy script + script tests done; Sepolia broadcast next) |
 
 ## How to run
 
@@ -40,7 +40,16 @@ Requires [Foundry](https://getfoundry.sh/).
 git clone --recurse-submodules https://github.com/mhaney93/defi-amm.git
 cd defi-amm
 forge build
-forge test   # 44 tests; add -vv to see the invariant call counts
+forge test   # 47 tests; add -vv to see the invariant call counts
+```
+
+Deploy two test tokens plus a seeded pool (uses an encrypted keystore, so no private key in `.env`):
+
+```bash
+cp .env.example .env   # fill in SEPOLIA_RPC_URL and ETHERSCAN_API_KEY
+cast wallet import deployer --interactive
+source .env
+forge script script/DeploySimpleAMM.s.sol --rpc-url $SEPOLIA_RPC_URL \n  --account deployer --sender <deployer address> --broadcast --verify
 ```
 
 ## Stack
