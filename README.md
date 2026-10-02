@@ -40,7 +40,7 @@ Requires [Foundry](https://getfoundry.sh/).
 git clone --recurse-submodules https://github.com/mhaney93/defi-amm.git
 cd defi-amm
 forge build
-forge test   # 47 tests; add -vv to see the invariant call counts
+forge test   # 47 tests (Foundry 1.8+ runs the 5 invariants as one campaign, so it prints 43); add -vv for call counts
 ```
 
 Deploy two test tokens plus a seeded pool (uses an encrypted keystore, so no private key in `.env`):
@@ -54,14 +54,13 @@ forge script script/DeploySimpleAMM.s.sol --rpc-url $SEPOLIA_RPC_URL \n  --accou
 
 ## Gas
 
-Measured with `forge test --gas-report` on the unit tests. Costs include the ERC20 transfers.
+Measured with `forge test --gas-report` on the unit tests (Foundry v1.8.4). Costs include the ERC20 transfers. Contract size: 10,498 bytes.
 
 | Function | Median | Max | Notes |
 |---|---|---|---|
 | `addLiquidity` | 215,869 | 218,166 | Highest on the first deposit, which writes fresh storage and locks `MINIMUM_LIQUIDITY` |
 | `swap` | 72,485 | 73,105 | |
-| `removeLiquidity` | 55,246 | 82,252 | |
-| Deployment | 2,016,972 | | 10,498 bytes |
+| `removeLiquidity` | 57,022 | 82,276 | |
 
 `.gas-snapshot` records per-test gas for the unit tests, and CI fails if a change moves any of them by more than 1%. To update it on purpose: `forge snapshot --match-path test/SimpleAMM.t.sol`.
 
