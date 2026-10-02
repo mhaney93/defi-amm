@@ -52,6 +52,19 @@ source .env
 forge script script/DeploySimpleAMM.s.sol --rpc-url $SEPOLIA_RPC_URL \n  --account deployer --sender <deployer address> --broadcast --verify
 ```
 
+## Gas
+
+Measured with `forge test --gas-report` on the unit tests. Costs include the ERC20 transfers.
+
+| Function | Median | Max | Notes |
+|---|---|---|---|
+| `addLiquidity` | 215,869 | 218,166 | Highest on the first deposit, which writes fresh storage and locks `MINIMUM_LIQUIDITY` |
+| `swap` | 72,485 | 73,105 | |
+| `removeLiquidity` | 55,246 | 82,252 | |
+| Deployment | 2,016,972 | | 10,498 bytes |
+
+`.gas-snapshot` records per-test gas for the unit tests, and CI fails if a change moves any of them by more than 1%. To update it on purpose: `forge snapshot --match-path test/SimpleAMM.t.sol`.
+
 ## Stack
 
 Solidity ^0.8.24 · Foundry · OpenZeppelin Contracts v5

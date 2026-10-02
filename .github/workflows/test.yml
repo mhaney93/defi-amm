@@ -33,3 +33,6 @@ jobs:
 
       - name: Run Forge tests
         run: forge test -vvv
+
+      - name: Check gas snapshot
+        run: forge snapshot --match-path test/SimpleAMM.t.sol --check --tolerance 1
