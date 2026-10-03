@@ -49,7 +49,8 @@ Deploy two test tokens plus a seeded pool (uses an encrypted keystore, so no pri
 cp .env.example .env   # fill in SEPOLIA_RPC_URL and ETHERSCAN_API_KEY
 cast wallet import deployer --interactive
 source .env
-forge script script/DeploySimpleAMM.s.sol --rpc-url $SEPOLIA_RPC_URL \n  --account deployer --sender <deployer address> --broadcast --verify
+forge script script/DeploySimpleAMM.s.sol --rpc-url $SEPOLIA_RPC_URL \
+  --account deployer --sender <deployer address> --broadcast --verify
 ```
 
 ## Gas
