@@ -29,7 +29,7 @@ AMMs are the base layer of DeFi: most DEXs, lending liquidations and on-chain pr
 | 3 | `removeLiquidity` | ✅ Done |
 | 4 | `swap` with 0.3% fee + `getAmountOut` | ✅ Done |
 | 5 | Slippage protection (`minOut`), `ReentrancyGuard`, full events | ✅ Done |
-| 6 | Test suite: unit, fuzz, and invariant (`k` never decreases) | ✅ Done (44 tests: unit, reentrancy, fuzz, and handler-based invariants) |
+| 6 | Test suite: unit, fuzz, and invariant (`k` never decreases) | ✅ Done (unit, reentrancy, fuzz, and handler-based invariants) |
 | 7 | Sepolia deployment | 🔨 In progress (deploy script + script tests done; Sepolia broadcast next) |
 
 ## How to run
@@ -55,15 +55,24 @@ forge script script/DeploySimpleAMM.s.sol --rpc-url $SEPOLIA_RPC_URL \
 
 ## Gas
 
-Measured with `forge test --gas-report` on the unit tests (Foundry v1.8.4). Costs include the ERC20 transfers. Contract size: 10,498 bytes.
+Measured with `forge test --gas-report` on the unit tests (Foundry v1.8.4). Costs include the ERC20 transfers. Contract size: 10,434 bytes.
 
 | Function | Median | Max | Notes |
 |---|---|---|---|
 | `addLiquidity` | 215,869 | 218,166 | Highest on the first deposit, which writes fresh storage and locks `MINIMUM_LIQUIDITY` |
-| `swap` | 72,485 | 73,105 | |
+| `swap` | 72,500 | 73,129 | |
 | `removeLiquidity` | 57,022 | 82,276 | |
 
 `.gas-snapshot` records per-test gas for the unit tests, and CI fails if a change moves any of them by more than 1%. To update it on purpose: `forge snapshot --match-path test/SimpleAMM.t.sol`.
+
+## Static analysis
+
+CI runs [Slither](https://github.com/crytic/slither) on `src/` and fails on any finding. Run it locally with `pip install slither-analyzer` then `slither .`.
+
+The first run flagged two things:
+
+- **`divide-before-multiply` in `addLiquidity`.** The ratio-matched deposit amount is floored, then used in the share math. This is intended: flooring only makes the deposit smaller, and the share math floors again, so the rounding loss stays in the pool. It's suppressed inline with a comment explaining why.
+- **`uninitialized-local` in `swap`.** `zeroForOne` relied on the default `false`. It was harmless, but it's now set explicitly.
 
 ## Stack
 

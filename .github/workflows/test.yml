@@ -38,3 +38,30 @@ jobs:
 
       - name: Check gas snapshot
         run: forge snapshot --match-path test/SimpleAMM.t.sol --check --tolerance 1
+
+  slither:
+    name: Slither static analysis
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.8.4
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Slither
+        run: pip install slither-analyzer==0.11.6
+
+      # Fails the job on any finding. Paths to skip are in slither.config.json.
+      - name: Run Slither
+        run: slither .

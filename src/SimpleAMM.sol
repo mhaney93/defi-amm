@@ -91,6 +91,10 @@ contract SimpleAMM is ERC20, ReentrancyGuardTransient {
             if (amount1Optimal <= amount1Desired) {
                 (amount0, amount1) = (amount0Desired, amount1Optimal);
             } else {
+                // Slither flags this as divide-before-multiply because the floored quote feeds the share
+                // math below. That's intended: flooring only shrinks the deposit, and the share math floors
+                // again, so any rounding loss stays in the pool (Uniswap V2's quote() works the same way).
+                // slither-disable-next-line divide-before-multiply
                 uint256 amount0Optimal = (amount1Desired * _reserve0) / _reserve1;
                 (amount0, amount1) = (amount0Optimal, amount1Desired);
             }
@@ -165,9 +169,8 @@ contract SimpleAMM is ERC20, ReentrancyGuardTransient {
     {
         if (amountIn == 0) revert ZeroAmount();
 
-        bool zeroForOne;
-        if (tokenIn == address(token0)) zeroForOne = true;
-        else if (tokenIn != address(token1)) revert InvalidToken();
+        bool zeroForOne = tokenIn == address(token0);
+        if (!zeroForOne && tokenIn != address(token1)) revert InvalidToken();
 
         (uint256 reserveIn, uint256 reserveOut) = zeroForOne ? (reserve0, reserve1) : (reserve1, reserve0);
         amountOut = getAmountOut(amountIn, reserveIn, reserveOut);
