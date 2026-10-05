@@ -19,6 +19,7 @@ AMMs are the base layer of DeFi: most DEXs, lending liquidations and on-chain pr
 - **Slippage limits.** `addLiquidity` and `removeLiquidity` take min amounts for each token, and `swap` takes `minAmountOut`. If the price moves before the tx lands, it reverts instead of filling at a worse rate.
 - **Reentrancy guard.** Every state-changing function is `nonReentrant`, using OpenZeppelin's `ReentrancyGuardTransient` (the lock lives in EIP-1153 transient storage, so it's cheap and clears itself after each tx).
 - **Checks-effects-interactions.** Reserves and shares update before any token transfer, and transfers use `SafeERC20`.
+- **TWAP price oracle.** The pool keeps Uniswap V2-style running sums of price × seconds, so other contracts can read a time-weighted average price. See [Price oracle](#price-oracle).
 
 ## Roadmap
 
@@ -31,6 +32,7 @@ AMMs are the base layer of DeFi: most DEXs, lending liquidations and on-chain pr
 | 5 | Slippage protection (`minOut`), `ReentrancyGuard`, full events | ✅ Done |
 | 6 | Test suite: unit, fuzz, and invariant (`k` never decreases) | ✅ Done (unit, reentrancy, fuzz, and handler-based invariants) |
 | 7 | Sepolia deployment | 🔨 In progress (deploy script + script tests done; Sepolia broadcast next) |
+| 8 | TWAP price oracle (cumulative prices) | ✅ Done |
 
 ## How to run
 
@@ -40,7 +42,7 @@ Requires [Foundry](https://getfoundry.sh/).
 git clone --recurse-submodules https://github.com/mhaney93/defi-amm.git
 cd defi-amm
 forge build
-forge test   # 47 tests (Foundry 1.8+ runs the 5 invariants as one campaign, so it prints 43); add -vv for call counts
+forge test   # 54 tests (Foundry 1.8+ runs the 5 invariants as one campaign, so it prints 50); add -vv for call counts
 ```
 
 Deploy two test tokens plus a seeded pool (uses an encrypted keystore, so no private key in `.env`):
@@ -55,15 +57,28 @@ forge script script/DeploySimpleAMM.s.sol --rpc-url $SEPOLIA_RPC_URL \
 
 ## Gas
 
-Measured with `forge test --gas-report` on the unit tests (Foundry v1.8.4). Costs include the ERC20 transfers. Contract size: 10,434 bytes.
+Measured with `forge test --gas-report` on the unit tests (Foundry v1.8.4). Costs include the ERC20 transfers. Runtime size: 9,467 bytes (the EIP-170 limit is 24,576).
 
 | Function | Median | Max | Notes |
 |---|---|---|---|
-| `addLiquidity` | 215,869 | 218,166 | Highest on the first deposit, which writes fresh storage and locks `MINIMUM_LIQUIDITY` |
-| `swap` | 72,500 | 73,129 | |
-| `removeLiquidity` | 57,022 | 82,276 | |
+| `addLiquidity` | 243,122 | 245,419 | Highest on the first deposit, which writes fresh storage and locks `MINIMUM_LIQUIDITY` |
+| `swap` | 74,711 | 75,331 | |
+| `removeLiquidity` | 58,133 | 84,454 | |
 
 `.gas-snapshot` records per-test gas for the unit tests, and CI fails if a change moves any of them by more than 1%. To update it on purpose: `forge snapshot --match-path test/SimpleAMM.t.sol`.
+
+The unit tests all run in one block, so this table doesn't show the oracle's main cost: the first trade in each block also updates the price sums, about 16k more gas than a trade that doesn't touch them (2k for later trades in the same block). These are warm-storage figures from a single test transaction, so a real transaction pays a little more.
+
+## Price oracle
+
+Spot price is easy to manipulate: one large swap moves it, and a lending protocol that reads it can be drained in the same transaction. A time-weighted average price (TWAP) is much harder to move, because an attacker has to hold the distorted price for the whole averaging window.
+
+- **Running sums.** `price0CumulativeLast` adds up `(reserve1 / reserve0) × seconds`, and `price1CumulativeLast` does the same for the inverse price. Prices are fixed point with 112 fractional bits (Uniswap V2's UQ112x112).
+- **Updated once per block, before reserves change.** The first trade in a block adds the price that held since the last update; later trades in the same block add nothing. A swap followed by a swap back in the same block therefore can't move the average at all.
+- **Reading a TWAP.** Take two readings of `currentCumulativePrices()` some time apart: `TWAP = (cumulativeEnd - cumulativeStart) / (timeEnd - timeStart)`. The view includes the seconds since the last trade, so no transaction to the pool is needed.
+- **Overflow.** The sums are allowed to wrap, as in Uniswap V2; the difference between two readings is still correct if the reader subtracts in an `unchecked` block.
+
+The oracle tests (`test/SimpleAMM.oracle.t.sol`) include one that dumps 10× the pool's reserve in a single swap: the spot price drops by more than 98%, but an hour-long TWAP ending in that block doesn't change, and one second later it has moved by less than 0.1%.
 
 ## Static analysis
 
@@ -73,6 +88,8 @@ The first run flagged two things:
 
 - **`divide-before-multiply` in `addLiquidity`.** The ratio-matched deposit amount is floored, then used in the share math. This is intended: flooring only makes the deposit smaller, and the share math floors again, so the rounding loss stays in the pool. It's suppressed inline with a comment explaining why.
 - **`uninitialized-local` in `swap`.** `zeroForOne` relied on the default `false`. It was harmless, but it's now set explicitly.
+
+The oracle added a third: **`timestamp`**, because the pool compares `block.timestamp`. It's suppressed with a comment: the timestamp only measures elapsed time, so a validator shifting it by a few seconds just moves a little weight between two real prices. It can't create a price.
 
 ## Stack
 

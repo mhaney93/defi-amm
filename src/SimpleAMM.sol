@@ -47,6 +47,20 @@ contract SimpleAMM is ERC20, ReentrancyGuardTransient {
     uint256 public reserve0;
     uint256 public reserve1;
 
+    /// @dev Prices are stored as fixed point numbers with 112 fractional bits (Uniswap V2's UQ112x112),
+    ///      so a price of 1.0 is 2**112 and fractional prices keep their precision.
+    uint256 private constant Q112 = 2 ** 112;
+
+    /// @notice Running sum of (token1 per token0 price) * seconds, for time-weighted average prices.
+    /// @dev An oracle reads this twice and divides the difference by the seconds between the reads:
+    ///      TWAP = (cumulativeEnd - cumulativeStart) / (timeEnd - timeStart). The sums are allowed to wrap
+    ///      on overflow, and the subtraction still gives the right answer as long as the reader also wraps.
+    uint256 public price0CumulativeLast;
+    /// @notice Running sum of (token0 per token1 price) * seconds.
+    uint256 public price1CumulativeLast;
+    /// @notice Timestamp of the last block that changed the reserves.
+    uint256 public blockTimestampLast;
+
     constructor(address _token0, address _token1) ERC20("SimpleAMM LP", "SAMM-LP") {
         if (_token0 == _token1) revert IdenticalTokens();
         if (_token0 == address(0) || _token1 == address(0)) revert ZeroAddress();
@@ -107,8 +121,7 @@ contract SimpleAMM is ERC20, ReentrancyGuardTransient {
         if (amount1 < amount1Min) revert InsufficientAmount1();
 
         // Effects before interactions: update state, then pull tokens.
-        reserve0 = _reserve0 + amount0;
-        reserve1 = _reserve1 + amount1;
+        _updateReserves(_reserve0 + amount0, _reserve1 + amount1);
         _mint(msg.sender, liquidity);
 
         token0.safeTransferFrom(msg.sender, address(this), amount0);
@@ -146,8 +159,7 @@ contract SimpleAMM is ERC20, ReentrancyGuardTransient {
         // Effects before interactions: burn shares and shrink reserves, then send tokens.
         // _burn reverts if the caller holds fewer than `liquidity` shares.
         _burn(msg.sender, liquidity);
-        reserve0 = _reserve0 - amount0;
-        reserve1 = _reserve1 - amount1;
+        _updateReserves(_reserve0 - amount0, _reserve1 - amount1);
 
         token0.safeTransfer(msg.sender, amount0);
         token1.safeTransfer(msg.sender, amount1);
@@ -172,19 +184,19 @@ contract SimpleAMM is ERC20, ReentrancyGuardTransient {
         bool zeroForOne = tokenIn == address(token0);
         if (!zeroForOne && tokenIn != address(token1)) revert InvalidToken();
 
-        (uint256 reserveIn, uint256 reserveOut) = zeroForOne ? (reserve0, reserve1) : (reserve1, reserve0);
+        uint256 _reserve0 = reserve0;
+        uint256 _reserve1 = reserve1;
+        (uint256 reserveIn, uint256 reserveOut) = zeroForOne ? (_reserve0, _reserve1) : (_reserve1, _reserve0);
         amountOut = getAmountOut(amountIn, reserveIn, reserveOut);
         if (amountOut == 0 || amountOut < minAmountOut) revert InsufficientOutputAmount();
 
         // Effects before interactions: the full amountIn (fee included) joins the reserves.
         if (zeroForOne) {
-            reserve0 = reserveIn + amountIn;
-            reserve1 = reserveOut - amountOut;
+            _updateReserves(_reserve0 + amountIn, _reserve1 - amountOut);
             token0.safeTransferFrom(msg.sender, address(this), amountIn);
             token1.safeTransfer(msg.sender, amountOut);
         } else {
-            reserve1 = reserveIn + amountIn;
-            reserve0 = reserveOut - amountOut;
+            _updateReserves(_reserve0 - amountOut, _reserve1 + amountIn);
             token1.safeTransferFrom(msg.sender, address(this), amountIn);
             token0.safeTransfer(msg.sender, amountOut);
         }
@@ -206,5 +218,47 @@ contract SimpleAMM is ERC20, ReentrancyGuardTransient {
 
         uint256 amountInWithFee = amountIn * FEE_NUMERATOR;
         amountOut = (amountInWithFee * reserveOut) / (reserveIn * FEE_DENOMINATOR + amountInWithFee);
+    }
+
+    /// @notice The cumulative prices as of this block, including the seconds since the last update.
+    /// @dev Lets an oracle take a reading without sending a transaction to the pool first.
+    ///      Each second adds the price as it stood at the start of the current block, so a trade
+    ///      only moves the average for as long as its price actually lasts on chain.
+    ///      Math.mulDiv reverts if a price is above 2**144, which would need a reserve ratio
+    ///      far beyond any real pair (Uniswap V2 rules it out by capping reserves at uint112).
+    function currentCumulativePrices() public view returns (uint256 price0Cumulative, uint256 price1Cumulative) {
+        price0Cumulative = price0CumulativeLast;
+        price1Cumulative = price1CumulativeLast;
+
+        uint256 _reserve0 = reserve0;
+        uint256 _reserve1 = reserve1;
+        uint256 timeElapsed = block.timestamp - blockTimestampLast;
+        // Only elapsed time is measured, so a validator nudging the timestamp by a few seconds
+        // just shifts a little weight between two prices. It can't make up a price.
+        // slither-disable-start timestamp
+        // forge-lint: disable-next-line(block-timestamp)
+        if (timeElapsed > 0 && _reserve0 != 0 && _reserve1 != 0) {
+            unchecked {
+                price0Cumulative += Math.mulDiv(_reserve1, Q112, _reserve0) * timeElapsed;
+                price1Cumulative += Math.mulDiv(_reserve0, Q112, _reserve1) * timeElapsed;
+            }
+        }
+        // slither-disable-end timestamp
+    }
+
+    /// @dev Every reserve change goes through here. The first change in a block folds the old
+    ///      price into the accumulators before the reserves move; later changes in the same block
+    ///      skip that, which is what stops a same-block swap-and-swap-back from moving the TWAP.
+    function _updateReserves(uint256 newReserve0, uint256 newReserve1) private {
+        // Same reasoning as in currentCumulativePrices: the timestamp only marks a new block.
+        // slither-disable-start timestamp
+        // forge-lint: disable-next-line(block-timestamp)
+        if (block.timestamp != blockTimestampLast) {
+            (price0CumulativeLast, price1CumulativeLast) = currentCumulativePrices();
+            blockTimestampLast = block.timestamp;
+        }
+        // slither-disable-end timestamp
+        reserve0 = newReserve0;
+        reserve1 = newReserve1;
     }
 }
