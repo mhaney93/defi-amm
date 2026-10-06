@@ -33,6 +33,7 @@ AMMs are the base layer of DeFi: most DEXs, lending liquidations and on-chain pr
 | 6 | Test suite: unit, fuzz, and invariant (`k` never decreases) | ✅ Done (unit, reentrancy, fuzz, and handler-based invariants) |
 | 7 | Sepolia deployment | 🔨 In progress (deploy script + script tests done; Sepolia broadcast next) |
 | 8 | TWAP price oracle (cumulative prices) | ✅ Done |
+| 9 | Fee-on-transfer tokens: book what actually arrived | 🔨 In progress (problem reproduced in tests; fix next) |
 
 ## How to run
 
@@ -42,7 +43,7 @@ Requires [Foundry](https://getfoundry.sh/).
 git clone --recurse-submodules https://github.com/mhaney93/defi-amm.git
 cd defi-amm
 forge build
-forge test   # 54 tests (Foundry 1.8+ runs the 5 invariants as one campaign, so it prints 50); add -vv for call counts
+forge test   # 57 tests (Foundry 1.8+ runs the 5 invariants as one campaign, so it prints 53); add -vv for call counts
 ```
 
 Deploy two test tokens plus a seeded pool (uses an encrypted keystore, so no private key in `.env`):
@@ -90,6 +91,16 @@ The first run flagged two things:
 - **`uninitialized-local` in `swap`.** `zeroForOne` relied on the default `false`. It was harmless, but it's now set explicitly.
 
 The oracle added a third: **`timestamp`**, because the pool compares `block.timestamp`. It's suppressed with a comment: the timestamp only measures elapsed time, so a validator shifting it by a few seconds just moves a little weight between two real prices. It can't create a price.
+
+## Known limitations
+
+**Fee-on-transfer tokens break the accounting.** The pool books the amount the caller asked to send, not the amount that arrived. If a token takes a cut on every transfer, the stored reserves end up higher than the pool's real balance:
+
+- a deposit of 100 tokens records 100 but only 99 arrive;
+- a swap prices the trader as if the full input arrived, so they're paid for tokens the pool never got;
+- the gap grows with every trade, and the last LP to withdraw hits a failed transfer because the pool doesn't hold what its reserves say.
+
+`test/SimpleAMM.feeOnTransfer.t.sol` reproduces all three with a 1%-fee mock token. The fix (roadmap row 9) is to measure each token's balance before and after the transfer in, and book the difference, like Uniswap V2 does. Rebasing tokens, whose balances change without any transfer, have the same problem and aren't supported either.
 
 ## Stack
 
