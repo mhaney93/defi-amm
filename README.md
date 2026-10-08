@@ -33,7 +33,7 @@ AMMs are the base layer of DeFi: most DEXs, lending liquidations and on-chain pr
 | 6 | Test suite: unit, fuzz, and invariant (`k` never decreases) | ✅ Done (unit, reentrancy, fuzz, and handler-based invariants) |
 | 7 | Sepolia deployment | 🔨 In progress (deploy script + script tests done; Sepolia broadcast next) |
 | 8 | TWAP price oracle (cumulative prices) | ✅ Done |
-| 9 | Fee-on-transfer tokens: book what actually arrived | 🔨 In progress (problem reproduced in tests; fix next) |
+| 9 | Fee-on-transfer tokens: book what actually arrived | ✅ Done |
 
 ## How to run
 
@@ -43,7 +43,7 @@ Requires [Foundry](https://getfoundry.sh/).
 git clone --recurse-submodules https://github.com/mhaney93/defi-amm.git
 cd defi-amm
 forge build
-forge test   # 57 tests (Foundry 1.8+ runs the 5 invariants as one campaign, so it prints 53); add -vv for call counts
+forge test   # 61 tests (Foundry 1.8+ runs the 5 invariants as one campaign, so it prints 57); add -vv for call counts
 ```
 
 Deploy two test tokens plus a seeded pool (uses an encrypted keystore, so no private key in `.env`):
@@ -58,13 +58,15 @@ forge script script/DeploySimpleAMM.s.sol --rpc-url $SEPOLIA_RPC_URL \
 
 ## Gas
 
-Measured with `forge test --gas-report` on the unit tests (Foundry v1.8.4). Costs include the ERC20 transfers. Runtime size: 9,467 bytes (the EIP-170 limit is 24,576).
+Measured with `forge test --gas-report` on the unit tests (Foundry v1.8.4). Costs include the ERC20 transfers. Runtime size: 9,694 bytes (the EIP-170 limit is 24,576).
 
 | Function | Median | Max | Notes |
 |---|---|---|---|
-| `addLiquidity` | 243,122 | 245,419 | Highest on the first deposit, which writes fresh storage and locks `MINIMUM_LIQUIDITY` |
-| `swap` | 74,711 | 75,331 | |
+| `addLiquidity` | 249,813 | 252,156 | Highest on the first deposit, which writes fresh storage and locks `MINIMUM_LIQUIDITY` |
+| `swap` | 72,882 | 78,711 | |
 | `removeLiquidity` | 58,133 | 84,454 | |
+
+Each token pulled in costs two extra `balanceOf` calls, because the pool measures its balance before and after the transfer (see Fee-on-transfer tokens below).
 
 `.gas-snapshot` records per-test gas for the unit tests, and CI fails if a change moves any of them by more than 1%. To update it on purpose: `forge snapshot --match-path test/SimpleAMM.t.sol`.
 
@@ -81,6 +83,19 @@ Spot price is easy to manipulate: one large swap moves it, and a lending protoco
 
 The oracle tests (`test/SimpleAMM.oracle.t.sol`) include one that dumps 10× the pool's reserve in a single swap: the spot price drops by more than 98%, but an hour-long TWAP ending in that block doesn't change, and one second later it has moved by less than 0.1%.
 
+## Fee-on-transfer tokens
+
+Some tokens take a cut on every transfer, so the pool receives less than the caller sent. If the pool booked the amount sent, its stored reserves would drift above its real balance, traders would be paid for tokens that never arrived, and the last LP to withdraw would hit a failed transfer. `test/SimpleAMM.feeOnTransfer.t.sol` reproduced all three in commit `85d4c6e`.
+
+The fix is balance-delta accounting, as in Uniswap V2: `addLiquidity` and `swap` read the pool's balance, pull the tokens in, read it again, and use the difference.
+
+- **Shares and swap output are priced on what arrived.** A 1%-fee token sending 10 is treated as 9.9.
+- **The min amounts in `addLiquidity` are checked against what arrived**, so callers should allow for the fee.
+- **Transfers now come before the state updates** in those two functions. That's safe because every function is `nonReentrant`, so a token can't call back into the pool mid-transfer (the reentrancy tests still pass).
+- **Sending the fee token out needs no change.** The pool's balance drops by the full amount it sends; the trader just receives less. `minAmountOut` is checked against what the pool sends, not what the trader ends up with.
+
+The fee-on-transfer tests now assert that reserves equal balances after deposits, swaps in both directions and a full exit, including a fuzz test over random amounts.
+
 ## Static analysis
 
 CI runs [Slither](https://github.com/crytic/slither) on `src/` and fails on any finding. Run it locally with `pip install slither-analyzer` then `slither .`.
@@ -92,15 +107,11 @@ The first run flagged two things:
 
 The oracle added a third: **`timestamp`**, because the pool compares `block.timestamp`. It's suppressed with a comment: the timestamp only measures elapsed time, so a validator shifting it by a few seconds just moves a little weight between two real prices. It can't create a price.
 
+Balance-delta accounting added a fourth: **`incorrect-equality`** on six `== 0` checks, because those values now come from `balanceOf`, which anyone can raise by sending tokens straight to the pool. Each check only reverts on zero, and raising a value from zero just makes it a normal, valid state, so none of them can be gamed. This detector is excluded in `slither.config.json`.
+
 ## Known limitations
 
-**Fee-on-transfer tokens break the accounting.** The pool books the amount the caller asked to send, not the amount that arrived. If a token takes a cut on every transfer, the stored reserves end up higher than the pool's real balance:
-
-- a deposit of 100 tokens records 100 but only 99 arrive;
-- a swap prices the trader as if the full input arrived, so they're paid for tokens the pool never got;
-- the gap grows with every trade, and the last LP to withdraw hits a failed transfer because the pool doesn't hold what its reserves say.
-
-`test/SimpleAMM.feeOnTransfer.t.sol` reproduces all three with a 1%-fee mock token. The fix (roadmap row 9) is to measure each token's balance before and after the transfer in, and book the difference, like Uniswap V2 does. Rebasing tokens, whose balances change without any transfer, have the same problem and aren't supported either.
+**Rebasing tokens aren't supported.** Their balances change without any transfer, so the stored reserves drift away from the real balance between trades. Uniswap V2 handles this with `sync()` and `skim()`; this pool doesn't have them.
 
 ## Stack
 

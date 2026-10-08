@@ -28,6 +28,7 @@ contract SimpleAMM is ERC20, ReentrancyGuardTransient {
 
     event LiquidityAdded(address indexed provider, uint256 amount0, uint256 amount1, uint256 liquidity);
     event LiquidityRemoved(address indexed provider, uint256 amount0, uint256 amount1, uint256 liquidity);
+    /// @dev amountIn is what the pool received, which is less than what was sent for a fee-on-transfer token.
     event Swap(address indexed trader, address indexed tokenIn, uint256 amountIn, uint256 amountOut);
 
     /// @notice Swap fee is 0.3%, expressed as 997/1000 of the input going into the curve.
@@ -73,12 +74,14 @@ contract SimpleAMM is ERC20, ReentrancyGuardTransient {
     /// @dev After the first deposit, only the amounts that match the current reserve ratio
     ///      are pulled, so the caller is never charged for the excess of either token.
     ///      The min amounts protect the caller if the ratio moves before the tx lands.
+    ///      Tokens are pulled in first and shares are priced on what actually arrived, so a
+    ///      fee-on-transfer token can't credit the pool with more than it received.
     /// @param amount0Desired Max amount of token0 the caller is willing to deposit.
     /// @param amount1Desired Max amount of token1 the caller is willing to deposit.
-    /// @param amount0Min Revert if less than this much token0 would be deposited.
-    /// @param amount1Min Revert if less than this much token1 would be deposited.
-    /// @return amount0 Amount of token0 actually deposited.
-    /// @return amount1 Amount of token1 actually deposited.
+    /// @param amount0Min Revert if the pool receives less than this much token0.
+    /// @param amount1Min Revert if the pool receives less than this much token1.
+    /// @return amount0 Amount of token0 the pool actually received.
+    /// @return amount1 Amount of token1 the pool actually received.
     /// @return liquidity LP shares minted to the caller.
     function addLiquidity(uint256 amount0Desired, uint256 amount1Desired, uint256 amount0Min, uint256 amount1Min)
         external
@@ -91,16 +94,11 @@ contract SimpleAMM is ERC20, ReentrancyGuardTransient {
         uint256 _reserve1 = reserve1;
         uint256 supply = totalSupply();
 
+        // Work out how much of each token to pull. After the first deposit, match the current ratio:
+        // use all of one token and the proportional amount of the other.
         if (supply == 0) {
-            // First deposit sets the price. Shares = geometric mean of the two amounts.
-            amount0 = amount0Desired;
-            amount1 = amount1Desired;
-            liquidity = Math.sqrt(amount0 * amount1);
-            if (liquidity <= MINIMUM_LIQUIDITY) revert InsufficientLiquidityMinted();
-            liquidity -= MINIMUM_LIQUIDITY;
-            _mint(DEAD, MINIMUM_LIQUIDITY);
+            (amount0, amount1) = (amount0Desired, amount1Desired);
         } else {
-            // Match the current ratio: use all of one token and the proportional amount of the other.
             uint256 amount1Optimal = (amount0Desired * _reserve1) / _reserve0;
             if (amount1Optimal <= amount1Desired) {
                 (amount0, amount1) = (amount0Desired, amount1Optimal);
@@ -112,20 +110,30 @@ contract SimpleAMM is ERC20, ReentrancyGuardTransient {
                 uint256 amount0Optimal = (amount1Desired * _reserve0) / _reserve1;
                 (amount0, amount1) = (amount0Optimal, amount1Desired);
             }
+        }
+
+        // Pull first, then book only what arrived. This puts the transfers before the state updates,
+        // which is safe here because nonReentrant blocks any callback into the pool.
+        amount0 = _pullIn(token0, amount0);
+        amount1 = _pullIn(token1, amount1);
+        if (amount0 < amount0Min) revert InsufficientAmount0();
+        if (amount1 < amount1Min) revert InsufficientAmount1();
+
+        if (supply == 0) {
+            // First deposit sets the price. Shares = geometric mean of the two amounts.
+            liquidity = Math.sqrt(amount0 * amount1);
+            if (liquidity <= MINIMUM_LIQUIDITY) revert InsufficientLiquidityMinted();
+            liquidity -= MINIMUM_LIQUIDITY;
+            _mint(DEAD, MINIMUM_LIQUIDITY);
+        } else {
             // Take the smaller share so rounding always favors the pool, never the depositor.
+            // If a transfer fee shrank one side, the extra of the other side stays in the pool.
             liquidity = Math.min((amount0 * supply) / _reserve0, (amount1 * supply) / _reserve1);
             if (liquidity == 0) revert InsufficientLiquidityMinted();
         }
 
-        if (amount0 < amount0Min) revert InsufficientAmount0();
-        if (amount1 < amount1Min) revert InsufficientAmount1();
-
-        // Effects before interactions: update state, then pull tokens.
         _updateReserves(_reserve0 + amount0, _reserve1 + amount1);
         _mint(msg.sender, liquidity);
-
-        token0.safeTransferFrom(msg.sender, address(this), amount0);
-        token1.safeTransferFrom(msg.sender, address(this), amount1);
 
         emit LiquidityAdded(msg.sender, amount0, amount1, liquidity);
     }
@@ -170,8 +178,10 @@ contract SimpleAMM is ERC20, ReentrancyGuardTransient {
     /// @notice Swap an exact amount of one pool token for as much of the other as the curve allows.
     /// @dev The 0.3% fee stays in the pool, so k grows with every trade and LPs earn it pro rata.
     ///      minAmountOut caps slippage, so a sandwich or a stale quote can't fill the trade at a bad price.
+    ///      The input is pulled first and the trade is priced on what arrived, so a fee-on-transfer
+    ///      token is charged its fee before the curve sees it.
     /// @param tokenIn Address of the token being sold; must be token0 or token1.
-    /// @param amountIn Exact amount of tokenIn the caller sends.
+    /// @param amountIn Amount of tokenIn the caller sends (the pool may receive less if the token takes a fee).
     /// @param minAmountOut Revert if the output would be less than this.
     /// @return amountOut Amount of the other token sent to the caller.
     function swap(address tokenIn, uint256 amountIn, uint256 minAmountOut)
@@ -186,22 +196,23 @@ contract SimpleAMM is ERC20, ReentrancyGuardTransient {
 
         uint256 _reserve0 = reserve0;
         uint256 _reserve1 = reserve1;
+        (IERC20 inToken, IERC20 outToken) = zeroForOne ? (token0, token1) : (token1, token0);
         (uint256 reserveIn, uint256 reserveOut) = zeroForOne ? (_reserve0, _reserve1) : (_reserve1, _reserve0);
-        amountOut = getAmountOut(amountIn, reserveIn, reserveOut);
+
+        // Pull first and price the trade on what arrived. nonReentrant blocks any callback.
+        uint256 received = _pullIn(inToken, amountIn);
+        amountOut = getAmountOut(received, reserveIn, reserveOut);
         if (amountOut == 0 || amountOut < minAmountOut) revert InsufficientOutputAmount();
 
-        // Effects before interactions: the full amountIn (fee included) joins the reserves.
+        // The full received amount (fee included) joins the reserves.
         if (zeroForOne) {
-            _updateReserves(_reserve0 + amountIn, _reserve1 - amountOut);
-            token0.safeTransferFrom(msg.sender, address(this), amountIn);
-            token1.safeTransfer(msg.sender, amountOut);
+            _updateReserves(_reserve0 + received, _reserve1 - amountOut);
         } else {
-            _updateReserves(_reserve0 - amountOut, _reserve1 + amountIn);
-            token1.safeTransferFrom(msg.sender, address(this), amountIn);
-            token0.safeTransfer(msg.sender, amountOut);
+            _updateReserves(_reserve0 - amountOut, _reserve1 + received);
         }
+        outToken.safeTransfer(msg.sender, amountOut);
 
-        emit Swap(msg.sender, tokenIn, amountIn, amountOut);
+        emit Swap(msg.sender, tokenIn, received, amountOut);
     }
 
     /// @notice Quote how much comes out for a given input, after the 0.3% fee.
@@ -244,6 +255,14 @@ contract SimpleAMM is ERC20, ReentrancyGuardTransient {
             }
         }
         // slither-disable-end timestamp
+    }
+
+    /// @dev Transfers `amount` of `token` from the caller and returns how much the pool's balance
+    ///      actually went up. For a normal token that's `amount`; for a fee-on-transfer token it's less.
+    function _pullIn(IERC20 token, uint256 amount) private returns (uint256 received) {
+        uint256 balanceBefore = token.balanceOf(address(this));
+        token.safeTransferFrom(msg.sender, address(this), amount);
+        received = token.balanceOf(address(this)) - balanceBefore;
     }
 
     /// @dev Every reserve change goes through here. The first change in a block folds the old
