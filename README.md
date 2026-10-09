@@ -43,7 +43,7 @@ Requires [Foundry](https://getfoundry.sh/).
 git clone --recurse-submodules https://github.com/mhaney93/defi-amm.git
 cd defi-amm
 forge build
-forge test   # 61 tests (Foundry 1.8+ runs the 5 invariants as one campaign, so it prints 57); add -vv for call counts
+forge test   # 66 tests (Foundry 1.8+ runs each suite's 5 invariants as one campaign, so it prints 58); add -vv for call counts
 ```
 
 Deploy two test tokens plus a seeded pool (uses an encrypted keystore, so no private key in `.env`):
@@ -95,6 +95,8 @@ The fix is balance-delta accounting, as in Uniswap V2: `addLiquidity` and `swap`
 - **Sending the fee token out needs no change.** The pool's balance drops by the full amount it sends; the trader just receives less. `minAmountOut` is checked against what the pool sends, not what the trader ends up with.
 
 The fee-on-transfer tests now assert that reserves equal balances after deposits, swaps in both directions and a full exit, including a fuzz test over random amounts.
+
+The invariant suite also runs against a fee token. `test/invariant/SimpleAMM.feeOnTransfer.invariant.t.sol` reuses the same handler and all 5 invariants, with token0 swapped for a token that burns 1% per transfer, so random sequences of adds, removes and swaps by several actors have to keep reserves equal to balances. Run against the pre-fix contract (`85d4c6e`), `reservesMatchBalances` fails on the first deposit (1000 booked, 990 held); against the current contract all 5 pass over 256 runs × 500 calls.
 
 ## Static analysis
 

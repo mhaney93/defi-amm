@@ -4,19 +4,27 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {SimpleAMM} from "../../src/SimpleAMM.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
+import {IMintableERC20} from "../mocks/IMintableERC20.sol";
 import {SimpleAMMHandler} from "./SimpleAMMHandler.sol";
 
 /// @notice Stateful invariant tests. Foundry calls random sequences of handler functions
 ///         (add, remove, swap by different actors) and checks every invariant after each call.
 contract SimpleAMMInvariantTest is Test {
     SimpleAMM amm;
-    MockERC20 token0;
-    MockERC20 token1;
+    IMintableERC20 token0;
+    IMintableERC20 token1;
     SimpleAMMHandler handler;
 
+    /// @dev Overridden by the fee-on-transfer suite to swap in a token that takes a cut.
+    function _deployTokens() internal virtual returns (IMintableERC20, IMintableERC20) {
+        return (
+            IMintableERC20(address(new MockERC20("Token A", "TKA"))),
+            IMintableERC20(address(new MockERC20("Token B", "TKB")))
+        );
+    }
+
     function setUp() public {
-        token0 = new MockERC20("Token A", "TKA");
-        token1 = new MockERC20("Token B", "TKB");
+        (token0, token1) = _deployTokens();
         amm = new SimpleAMM(address(token0), address(token1));
 
         // Seed the pool so every sequence starts from a live market, not an empty one.

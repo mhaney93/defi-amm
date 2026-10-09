@@ -4,17 +4,19 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {SimpleAMM} from "../../src/SimpleAMM.sol";
-import {MockERC20} from "../mocks/MockERC20.sol";
+import {IMintableERC20} from "../mocks/IMintableERC20.sol";
 
 /// @notice The fuzzer calls this contract, not the pool directly. Each function bounds its
 ///         random inputs to something a real user could do, then calls the pool as one of a
 ///         few actors. That keeps runs from being wasted on calls that can only revert.
 /// @dev After every call the handler checks that k per LP share did not go down, and
 ///      records a failure in a ghost flag that the invariant test asserts on.
+///      Tokens are typed as IMintableERC20 so the same handler drives both the plain-token
+///      suite and the fee-on-transfer suite.
 contract SimpleAMMHandler is Test {
     SimpleAMM public immutable amm;
-    MockERC20 public immutable token0;
-    MockERC20 public immutable token1;
+    IMintableERC20 public immutable token0;
+    IMintableERC20 public immutable token1;
 
     address[] public actors;
 
@@ -30,7 +32,7 @@ contract SimpleAMMHandler is Test {
     uint256 public adds;
     uint256 public removes;
 
-    constructor(SimpleAMM _amm, MockERC20 _token0, MockERC20 _token1) {
+    constructor(SimpleAMM _amm, IMintableERC20 _token0, IMintableERC20 _token1) {
         amm = _amm;
         token0 = _token0;
         token1 = _token1;
@@ -97,7 +99,7 @@ contract SimpleAMMHandler is Test {
     function swap(uint256 actorSeed, bool zeroForOne, uint256 amountIn) external {
         address actor = _actor(actorSeed);
         amountIn = bound(amountIn, 1, MAX_AMOUNT);
-        MockERC20 tokenIn = zeroForOne ? token0 : token1;
+        IMintableERC20 tokenIn = zeroForOne ? token0 : token1;
         tokenIn.mint(actor, amountIn);
 
         uint256 kBefore = amm.reserve0() * amm.reserve1();
