@@ -43,7 +43,7 @@ Requires [Foundry](https://getfoundry.sh/).
 git clone --recurse-submodules https://github.com/mhaney93/defi-amm.git
 cd defi-amm
 forge build
-forge test   # 70 tests (Foundry 1.8+ runs each suite's 5 invariants as one campaign, so it prints 62); add -vv for call counts
+forge test   # 76 tests (Foundry 1.8+ runs each suite's 5 invariants as one campaign, so it prints 68); add -vv for call counts
 ```
 
 Deploy two test tokens plus a seeded pool (uses an encrypted keystore, so no private key in `.env`):
@@ -104,6 +104,13 @@ Some older tokens don't revert when a transfer fails. They return `false` and mo
 
 Every transfer in the pool goes through OpenZeppelin's `SafeERC20`, which turns a `false` return into a revert. `test/SimpleAMM.returnsFalse.t.sol` uses a token that can be switched into returning `false` and checks all four transfer paths: a deposit, a swap paying in, a swap paying out, and a withdrawal. Each one reverts with `SafeERC20FailedOperation`, nothing is booked, and an LP whose withdrawal failed keeps their shares and can withdraw once the token works again.
 
+## Mixed decimals
+
+The pool never reads `decimals()`; it only sees raw units. Pairing a 6-decimal token (like USDC) with a 24-decimal one means one whole token on each side differs by 10^18 raw units, which stresses the math from both ends. `test/SimpleAMM.decimals.t.sol` puts both in the same pool:
+
+- **Small trades into the 6-decimal side round down.** A trade worth less than one raw unit of the 6-decimal token gets 0 out, and the pool reverts with `InsufficientOutputAmount` instead of keeping the input. A trade worth about 2 raw units gets 1 after the fee, and the rounding loss stays in the pool (k goes up).
+- **Large 24-decimal amounts get close to the uint256 limit.** Reserves here are `uint256`, not capped at `uint112` like Uniswap V2, and `getAmountOut` multiplies before it divides. A trillion-token supply at 24 decimals (10^36 raw units) still fits with lots of room, but amounts around 10^35 against reserves of 10^40 overflow. Solidity 0.8's checked arithmetic makes that revert instead of wrapping around, so the worst case is a pool that can't trade, not a mispriced trade.
+
 ## Static analysis
 
 CI runs [Slither](https://github.com/crytic/slither) on `src/` and fails on any finding. Run it locally with `pip install slither-analyzer` then `slither .`.
@@ -120,6 +127,8 @@ Balance-delta accounting added a fourth: **`incorrect-equality`** on six `== 0` 
 ## Known limitations
 
 **Rebasing tokens aren't supported.** Their balances change without any transfer, so the stored reserves drift away from the real balance between trades. Uniswap V2 handles this with `sync()` and `skim()`; this pool doesn't have them.
+
+**Freezable tokens put the pool under the issuer's control.** USDC and USDT can blocklist an address at the token contract. If the pool's own address were blocklisted, its balance of that token would be stuck, and nothing in the pool's code can get it out. LPs in a pool with a freezable token are trusting the issuer on top of the contract.
 
 ## Stack
 
