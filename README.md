@@ -43,7 +43,7 @@ Requires [Foundry](https://getfoundry.sh/).
 git clone --recurse-submodules https://github.com/mhaney93/defi-amm.git
 cd defi-amm
 forge build
-forge test   # 81 tests (Foundry 1.8+ runs each suite's 5 invariants as one campaign, so it prints 73); add -vv for call counts
+forge test   # 87 tests (Foundry 1.8+ runs each suite's 5 invariants as one campaign, so it prints 79); add -vv for call counts
 ```
 
 Deploy two test tokens plus a seeded pool (uses an encrypted keystore, so no private key in `.env`):
@@ -109,6 +109,16 @@ Every transfer in the pool goes through OpenZeppelin's `SafeERC20`, which turns 
 Some tokens revert on any transfer of 0. A pool that ever tried to send 0 (say, a payout that rounded down) would get stuck on one of these.
 
 `test/SimpleAMM.revertOnZero.t.sol` pairs one with a normal token. The full lifecycle (deposit, swaps both ways, withdrawal) works. A dust swap whose output rounds to 0 and a dust withdrawal whose payout rounds to 0 both hit the pool's own check (`InsufficientOutputAmount`, `InsufficientLiquidityBurned`) before any transfer, so the pool never sends 0. The one place it asks for 0 is a deposit so lopsided that the matching amount of the scarce token rounds down to 0. That pull reverts with the token's error, but the same deposit with a normal token reverts a few lines later anyway because it would mint 0 shares, so the only difference is which error the caller sees.
+
+## ERC777-style hook tokens
+
+ERC777 tokens call hooks on their holders: `tokensToSend` on the sender before balances move, and `tokensReceived` on the recipient after. The before-hook hands control to the sender while the pool still shows the old balances. That's how Uniswap V1 pools holding imBTC were drained in 2020: the attacker traded again from inside the hook.
+
+The reentrancy tests in `test/SimpleAMM.t.sol` use a token that calls back into the pool itself. `test/SimpleAMM.hooks.t.sol` covers the ERC777 shape, where the callbacks go to the user's own contract:
+
+- **Hooks that leave the pool alone are harmless.** Both hooks fire during a deposit, a swap and a withdrawal, and reserves still equal balances afterwards.
+- **Re-entering from either hook is blocked.** Swapping again from `tokensToSend`, withdrawing from `tokensToSend` mid-deposit, depositing from `tokensReceived` after a swap, and swapping from `tokensReceived` mid-withdrawal all revert with `ReentrancyGuardReentrantCall`.
+- **A receiver that refuses tokens only blocks itself.** The pool only ever pays `msg.sender`, so an LP whose hook reverts can't withdraw, but everyone else can still swap and withdraw, and the LP keeps their shares until they fix the hook.
 
 ## Mixed decimals
 
