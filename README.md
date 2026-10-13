@@ -43,7 +43,7 @@ Requires [Foundry](https://getfoundry.sh/).
 git clone --recurse-submodules https://github.com/mhaney93/defi-amm.git
 cd defi-amm
 forge build
-forge test   # 76 tests (Foundry 1.8+ runs each suite's 5 invariants as one campaign, so it prints 68); add -vv for call counts
+forge test   # 81 tests (Foundry 1.8+ runs each suite's 5 invariants as one campaign, so it prints 73); add -vv for call counts
 ```
 
 Deploy two test tokens plus a seeded pool (uses an encrypted keystore, so no private key in `.env`):
@@ -103,6 +103,12 @@ The invariant suite also runs against a fee token. `test/invariant/SimpleAMM.fee
 Some older tokens don't revert when a transfer fails. They return `false` and move nothing. A pool that ignored the return value would book a deposit that never arrived, or pay out a swap for nothing.
 
 Every transfer in the pool goes through OpenZeppelin's `SafeERC20`, which turns a `false` return into a revert. `test/SimpleAMM.returnsFalse.t.sol` uses a token that can be switched into returning `false` and checks all four transfer paths: a deposit, a swap paying in, a swap paying out, and a withdrawal. Each one reverts with `SafeERC20FailedOperation`, nothing is booked, and an LP whose withdrawal failed keeps their shares and can withdraw once the token works again.
+
+## Tokens that revert on zero transfers
+
+Some tokens revert on any transfer of 0. A pool that ever tried to send 0 (say, a payout that rounded down) would get stuck on one of these.
+
+`test/SimpleAMM.revertOnZero.t.sol` pairs one with a normal token. The full lifecycle (deposit, swaps both ways, withdrawal) works. A dust swap whose output rounds to 0 and a dust withdrawal whose payout rounds to 0 both hit the pool's own check (`InsufficientOutputAmount`, `InsufficientLiquidityBurned`) before any transfer, so the pool never sends 0. The one place it asks for 0 is a deposit so lopsided that the matching amount of the scarce token rounds down to 0. That pull reverts with the token's error, but the same deposit with a normal token reverts a few lines later anyway because it would mint 0 shares, so the only difference is which error the caller sees.
 
 ## Mixed decimals
 
