@@ -43,7 +43,7 @@ Requires [Foundry](https://getfoundry.sh/).
 git clone --recurse-submodules https://github.com/mhaney93/defi-amm.git
 cd defi-amm
 forge build
-forge test   # 87 tests (Foundry 1.8+ runs each suite's 5 invariants as one campaign, so it prints 79); add -vv for call counts
+forge test   # 92 tests (Foundry 1.8+ runs each suite's 5 invariants as one campaign, so it prints 84); add -vv for call counts
 ```
 
 Deploy two test tokens plus a seeded pool (uses an encrypted keystore, so no private key in `.env`):
@@ -142,7 +142,12 @@ Balance-delta accounting added a fourth: **`incorrect-equality`** on six `== 0` 
 
 ## Known limitations
 
-**Rebasing tokens aren't supported.** Their balances change without any transfer, so the stored reserves drift away from the real balance between trades. Uniswap V2 handles this with `sync()` and `skim()`; this pool doesn't have them.
+**Rebasing tokens aren't supported.** Their balances change without any transfer, so the stored reserves drift away from the real balance between trades. Uniswap V2 handles this with `sync()` and `skim()`; this pool doesn't have them. `test/SimpleAMM.rebasing.t.sol` uses a shares-based token (like stETH) to show what that costs:
+
+- **Positive rebase: the extra is stranded.** After a +10% rebase the pool holds 110 but still prices trades on 100. When the only LP exits she gets her share of the 100, and the other 10 stay in the pool with no shares against them. A later deposit doesn't pick them up either, because the pool books only what arrives.
+- **Negative rebase: the last LP out takes the whole loss.** After a -10% rebase with two equal LPs, the pool holds 180 but owes 200. The first LP to exit gets a full 100, and the second one's withdrawal then reverts, because it needs 100 from a pool holding 80.
+
+The usual fix is to hold the wrapped, non-rebasing version instead (wstETH rather than stETH).
 
 **Freezable tokens put the pool under the issuer's control.** USDC and USDT can blocklist an address at the token contract. If the pool's own address were blocklisted, its balance of that token would be stuck, and nothing in the pool's code can get it out. LPs in a pool with a freezable token are trusting the issuer on top of the contract.
 
