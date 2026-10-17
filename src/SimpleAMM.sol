@@ -30,6 +30,7 @@ contract SimpleAMM is ERC20, ReentrancyGuardTransient {
     event LiquidityRemoved(address indexed provider, uint256 amount0, uint256 amount1, uint256 liquidity);
     /// @dev amountIn is what the pool received, which is less than what was sent for a fee-on-transfer token.
     event Swap(address indexed trader, address indexed tokenIn, uint256 amountIn, uint256 amountOut);
+    event Skim(address indexed caller, address indexed to, uint256 amount0, uint256 amount1);
 
     /// @notice Swap fee is 0.3%, expressed as 997/1000 of the input going into the curve.
     uint256 public constant FEE_NUMERATOR = 997;
@@ -215,6 +216,24 @@ contract SimpleAMM is ERC20, ReentrancyGuardTransient {
         emit Swap(msg.sender, tokenIn, received, amountOut);
     }
 
+    /// @notice Send whatever the pool holds above its reserves to `to`.
+    /// @dev Tokens sent straight to the pool (by mistake, or by a positive rebase) aren't in the reserves,
+    ///      so no LP can withdraw them. This lets anyone pull them out. Reserves don't change.
+    ///      A side whose balance is at or below its reserve is skipped instead of reverting, and the pool
+    ///      never sends 0, so a token that reverts on zero transfers can still be skimmed on the other side.
+    /// @param to Address that receives the excess.
+    /// @return amount0 Excess token0 sent.
+    /// @return amount1 Excess token1 sent.
+    function skim(address to) external nonReentrant returns (uint256 amount0, uint256 amount1) {
+        amount0 = _excess(token0, reserve0);
+        amount1 = _excess(token1, reserve1);
+
+        if (amount0 > 0) token0.safeTransfer(to, amount0);
+        if (amount1 > 0) token1.safeTransfer(to, amount1);
+
+        emit Skim(msg.sender, to, amount0, amount1);
+    }
+
     /// @notice Quote how much comes out for a given input, after the 0.3% fee.
     /// @dev From (reserveIn + amountInWithFee) * (reserveOut - amountOut) = reserveIn * reserveOut:
     ///      amountOut = amountInWithFee * reserveOut / (reserveIn + amountInWithFee).
@@ -263,6 +282,12 @@ contract SimpleAMM is ERC20, ReentrancyGuardTransient {
         uint256 balanceBefore = token.balanceOf(address(this));
         token.safeTransferFrom(msg.sender, address(this), amount);
         received = token.balanceOf(address(this)) - balanceBefore;
+    }
+
+    /// @dev How much of `token` the pool holds above `reserve`, or 0 if it holds that much or less.
+    function _excess(IERC20 token, uint256 reserve) private view returns (uint256) {
+        uint256 balance = token.balanceOf(address(this));
+        return balance > reserve ? balance - reserve : 0;
     }
 
     /// @dev Every reserve change goes through here. The first change in a block folds the old

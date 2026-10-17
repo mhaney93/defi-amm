@@ -19,6 +19,7 @@ AMMs are the base layer of DeFi: most DEXs, lending liquidations and on-chain pr
 - **Slippage limits.** `addLiquidity` and `removeLiquidity` take min amounts for each token, and `swap` takes `minAmountOut`. If the price moves before the tx lands, it reverts instead of filling at a worse rate.
 - **Reentrancy guard.** Every state-changing function is `nonReentrant`, using OpenZeppelin's `ReentrancyGuardTransient` (the lock lives in EIP-1153 transient storage, so it's cheap and clears itself after each tx).
 - **Checks-effects-interactions.** Reserves and shares update before any token transfer, and transfers use `SafeERC20`.
+- **`skim(to)` recovers stray tokens.** Tokens sent straight to the pool never enter the reserves, so no LP can withdraw them. `skim` sends anything above the reserves to `to` and leaves the reserves alone. A side with nothing extra is skipped, so it never sends 0. Tests: `test/SimpleAMM.skim.t.sol`.
 - **TWAP price oracle.** The pool keeps Uniswap V2-style running sums of price × seconds, so other contracts can read a time-weighted average price. See [Price oracle](#price-oracle).
 
 ## Roadmap
@@ -43,7 +44,7 @@ Requires [Foundry](https://getfoundry.sh/).
 git clone --recurse-submodules https://github.com/mhaney93/defi-amm.git
 cd defi-amm
 forge build
-forge test   # 92 tests (Foundry 1.8+ runs each suite's 5 invariants as one campaign, so it prints 84); add -vv for call counts
+forge test   # 99 tests (Foundry 1.8+ runs each suite's 5 invariants as one campaign, so it prints 91); add -vv for call counts
 ```
 
 Deploy two test tokens plus a seeded pool (uses an encrypted keystore, so no private key in `.env`):
@@ -58,11 +59,11 @@ forge script script/DeploySimpleAMM.s.sol --rpc-url $SEPOLIA_RPC_URL \
 
 ## Gas
 
-Measured with `forge test --gas-report` on the unit tests (Foundry v1.8.4). Costs include the ERC20 transfers. Runtime size: 9,694 bytes (the EIP-170 limit is 24,576).
+Measured with `forge test --gas-report` on the unit tests (Foundry v1.8.4). Costs include the ERC20 transfers. Runtime size: 10,315 bytes (the EIP-170 limit is 24,576).
 
 | Function | Median | Max | Notes |
 |---|---|---|---|
-| `addLiquidity` | 249,813 | 252,156 | Highest on the first deposit, which writes fresh storage and locks `MINIMUM_LIQUIDITY` |
+| `addLiquidity` | 249,836 | 252,179 | Highest on the first deposit, which writes fresh storage and locks `MINIMUM_LIQUIDITY` |
 | `swap` | 72,882 | 78,711 | |
 | `removeLiquidity` | 58,133 | 84,454 | |
 
@@ -142,10 +143,12 @@ Balance-delta accounting added a fourth: **`incorrect-equality`** on six `== 0` 
 
 ## Known limitations
 
-**Rebasing tokens aren't supported.** Their balances change without any transfer, so the stored reserves drift away from the real balance between trades. Uniswap V2 handles this with `sync()` and `skim()`; this pool doesn't have them. `test/SimpleAMM.rebasing.t.sol` uses a shares-based token (like stETH) to show what that costs:
+**Rebasing tokens aren't supported.** Their balances change without any transfer, so the stored reserves drift away from the real balance between trades. Uniswap V2 handles this with `sync()` and `skim()`. This pool now has `skim()` but not `sync()` yet. `test/SimpleAMM.rebasing.t.sol` uses a shares-based token (like stETH) to show what that costs:
 
 - **Positive rebase: the extra is stranded.** After a +10% rebase the pool holds 110 but still prices trades on 100. When the only LP exits she gets her share of the 100, and the other 10 stay in the pool with no shares against them. A later deposit doesn't pick them up either, because the pool books only what arrives.
 - **Negative rebase: the last LP out takes the whole loss.** After a -10% rebase with two equal LPs, the pool holds 180 but owes 200. The first LP to exit gets a full 100, and the second one's withdrawal then reverts, because it needs 100 from a pool holding 80.
+
+- **`skim()` gets a positive rebase out, but to the wrong person.** The surplus goes to whoever calls `skim` first, not to the LPs whose share it grew. After a negative rebase `skim` just skips the short side; it can't cover a shortfall.
 
 The usual fix is to hold the wrapped, non-rebasing version instead (wstETH rather than stETH).
 

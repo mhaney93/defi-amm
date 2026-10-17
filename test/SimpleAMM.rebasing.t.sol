@@ -102,6 +102,35 @@ contract SimpleAMMRebasingTest is Test {
         assertApproxEqAbs(token0.balanceOf(address(amm)) - amm.reserve0(), 10e18, 2);
     }
 
+    /// @dev skim() gets the +10% surplus out, but it goes to whoever calls skim first, not to the LP
+    ///      whose share of the pool it grew. Skim recovers stray tokens; it doesn't fix rebasing.
+    function test_positiveRebase_skimSendsSurplusToCaller() public {
+        _seed();
+        token0.rebase(1.1e18);
+
+        address caller = makeAddr("caller");
+        vm.prank(caller);
+        (uint256 amount0, uint256 amount1) = amm.skim(caller);
+
+        assertApproxEqAbs(amount0, 10e18, 2);
+        assertEq(amount1, 0);
+        assertApproxEqAbs(token0.balanceOf(caller), 10e18, 2);
+        assertEq(amm.reserve0(), 100e18);
+    }
+
+    /// @dev After a -10% rebase the pool holds less token0 than its reserve. skim() skips that side
+    ///      instead of reverting on the underflow, and the shortfall is still there afterwards.
+    function test_negativeRebase_skimSkipsShortSide() public {
+        _seed();
+        token0.rebase(0.9e18);
+
+        (uint256 amount0, uint256 amount1) = amm.skim(bob);
+
+        assertEq(amount0, 0);
+        assertEq(amount1, 0);
+        assertEq(amm.reserve0() - token0.balanceOf(address(amm)), 10e18);
+    }
+
     /// @dev -10% rebase with two equal LPs. The pool holds 180 token0 but owes 200. Whoever
     ///      exits first gets a full 100; the second LP's full withdrawal then needs 100 from a
     ///      pool holding 80, and reverts. The whole loss lands on the last one out.
