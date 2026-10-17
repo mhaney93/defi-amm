@@ -6,12 +6,12 @@ import {SimpleAMM} from "../src/SimpleAMM.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {RebasingToken} from "./mocks/RebasingToken.sol";
 
-/// @notice Pins down what goes wrong when token0 rebases. The README lists rebasing tokens as
-///         unsupported; these tests show exactly how. The pool only learns about balances through
-///         its own transfers, so a rebase leaves the stored reserves out of date:
-///         - after a positive rebase the extra tokens sit in the pool, unpriced and unclaimable;
+/// @notice Pins down what happens when token0 rebases. The pool only learns about balances through
+///         its own transfers, so a rebase leaves the stored reserves out of date until someone calls sync():
+///         - after a positive rebase the extra tokens sit in the pool, unpriced and unclaimable by LPs;
 ///         - after a negative rebase the pool owes more than it holds, and the last LP out can't leave.
-///         Uniswap V2's sync() and skim() exist for exactly this; SimpleAMM doesn't have them.
+///         The sync tests show the fix (gains and losses shared pro rata); the skim tests show why
+///         skim alone isn't one.
 contract SimpleAMMRebasingTest is Test {
     SimpleAMM amm;
     RebasingToken token0;
