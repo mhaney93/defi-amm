@@ -131,6 +131,45 @@ contract SimpleAMMRebasingTest is Test {
         assertEq(amm.reserve0() - token0.balanceOf(address(amm)), 10e18);
     }
 
+    /// @dev sync() after a +10% rebase books the surplus, so the only LP gets it when she exits and
+    ///      nothing is stranded.
+    function test_positiveRebase_syncGivesSurplusToLp() public {
+        uint256 liquidity = _seed();
+        token0.rebase(1.1e18);
+        amm.sync();
+        assertEq(amm.reserve0(), token0.balanceOf(address(amm)));
+
+        uint256 aliceBefore = token0.balanceOf(alice);
+        vm.prank(alice);
+        amm.removeLiquidity(liquidity, 0, 0);
+
+        assertGt(token0.balanceOf(alice) - aliceBefore, 109e18);
+        (uint256 skimmed0,) = amm.skim(bob);
+        assertEq(skimmed0, 0);
+    }
+
+    /// @dev sync() after a -10% rebase with two equal LPs splits the loss: each one gets about 90
+    ///      instead of the first getting 100 and the second getting stuck.
+    function test_negativeRebase_syncSplitsLossAcrossLps() public {
+        uint256 aliceLiq = _seed();
+        vm.prank(bob);
+        (,, uint256 bobLiq) = amm.addLiquidity(100e18, 100e18, 0, 0);
+
+        token0.rebase(0.9e18);
+        amm.sync();
+        assertEq(amm.reserve0(), 180e18);
+
+        uint256 aliceBefore = token0.balanceOf(alice);
+        vm.prank(alice);
+        amm.removeLiquidity(aliceLiq, 0, 0);
+        uint256 bobBefore = token0.balanceOf(bob);
+        vm.prank(bob);
+        amm.removeLiquidity(bobLiq, 0, 0);
+
+        assertApproxEqAbs(token0.balanceOf(alice) - aliceBefore, 90e18, 1e6);
+        assertApproxEqAbs(token0.balanceOf(bob) - bobBefore, 90e18, 1e6);
+    }
+
     /// @dev -10% rebase with two equal LPs. The pool holds 180 token0 but owes 200. Whoever
     ///      exits first gets a full 100; the second LP's full withdrawal then needs 100 from a
     ///      pool holding 80, and reverts. The whole loss lands on the last one out.

@@ -20,6 +20,7 @@ AMMs are the base layer of DeFi: most DEXs, lending liquidations and on-chain pr
 - **Reentrancy guard.** Every state-changing function is `nonReentrant`, using OpenZeppelin's `ReentrancyGuardTransient` (the lock lives in EIP-1153 transient storage, so it's cheap and clears itself after each tx).
 - **Checks-effects-interactions.** Reserves and shares update before any token transfer, and transfers use `SafeERC20`.
 - **`skim(to)` recovers stray tokens.** Tokens sent straight to the pool never enter the reserves, so no LP can withdraw them. `skim` sends anything above the reserves to `to` and leaves the reserves alone. A side with nothing extra is skipped, so it never sends 0. Tests: `test/SimpleAMM.skim.t.sol`.
+- **`sync()` books them instead.** It sets the reserves to the real balances, so tokens sent to the pool (or a rebase) become part of every LP's share. It updates the oracle the same way a trade does. Tests: `test/SimpleAMM.sync.t.sol`.
 - **TWAP price oracle.** The pool keeps Uniswap V2-style running sums of price × seconds, so other contracts can read a time-weighted average price. See [Price oracle](#price-oracle).
 
 ## Roadmap
@@ -44,7 +45,7 @@ Requires [Foundry](https://getfoundry.sh/).
 git clone --recurse-submodules https://github.com/mhaney93/defi-amm.git
 cd defi-amm
 forge build
-forge test   # 99 tests (Foundry 1.8+ runs each suite's 5 invariants as one campaign, so it prints 91); add -vv for call counts
+forge test   # 106 tests (Foundry 1.8+ runs each suite's 5 invariants as one campaign, so it prints 98); add -vv for call counts
 ```
 
 Deploy two test tokens plus a seeded pool (uses an encrypted keystore, so no private key in `.env`):
@@ -59,13 +60,13 @@ forge script script/DeploySimpleAMM.s.sol --rpc-url $SEPOLIA_RPC_URL \
 
 ## Gas
 
-Measured with `forge test --gas-report` on the unit tests (Foundry v1.8.4). Costs include the ERC20 transfers. Runtime size: 10,315 bytes (the EIP-170 limit is 24,576).
+Measured with `forge test --gas-report` on the unit tests (Foundry v1.8.4). Costs include the ERC20 transfers. Runtime size: 10,743 bytes (the EIP-170 limit is 24,576).
 
 | Function | Median | Max | Notes |
 |---|---|---|---|
-| `addLiquidity` | 249,836 | 252,179 | Highest on the first deposit, which writes fresh storage and locks `MINIMUM_LIQUIDITY` |
-| `swap` | 72,882 | 78,711 | |
-| `removeLiquidity` | 58,133 | 84,454 | |
+| `addLiquidity` | 249,924 | 252,267 | Highest on the first deposit, which writes fresh storage and locks `MINIMUM_LIQUIDITY` |
+| `swap` | 72,860 | 78,689 | |
+| `removeLiquidity` | 58,100 | 84,432 | |
 
 Each token pulled in costs two extra `balanceOf` calls, because the pool measures its balance before and after the transfer (see Fee-on-transfer tokens below).
 
@@ -143,14 +144,13 @@ Balance-delta accounting added a fourth: **`incorrect-equality`** on six `== 0` 
 
 ## Known limitations
 
-**Rebasing tokens aren't supported.** Their balances change without any transfer, so the stored reserves drift away from the real balance between trades. Uniswap V2 handles this with `sync()` and `skim()`. This pool now has `skim()` but not `sync()` yet. `test/SimpleAMM.rebasing.t.sol` uses a shares-based token (like stETH) to show what that costs:
+**Rebasing tokens need someone to call `sync()`.** Their balances change without any transfer, so the stored reserves drift away from the real balance until someone calls `sync()`. `test/SimpleAMM.rebasing.t.sol` uses a shares-based token (like stETH) to show both sides:
 
-- **Positive rebase: the extra is stranded.** After a +10% rebase the pool holds 110 but still prices trades on 100. When the only LP exits she gets her share of the 100, and the other 10 stay in the pool with no shares against them. A later deposit doesn't pick them up either, because the pool books only what arrives.
-- **Negative rebase: the last LP out takes the whole loss.** After a -10% rebase with two equal LPs, the pool holds 180 but owes 200. The first LP to exit gets a full 100, and the second one's withdrawal then reverts, because it needs 100 from a pool holding 80.
+- **Positive rebase without sync: the extra is stranded.** After a +10% rebase the pool holds 110 but still prices trades on 100. When the only LP exits she gets her share of the 100, and a later deposit doesn't pick up the other 10 either, because the pool books only what arrives. `skim()` can get it out, but to whoever calls it first, not to the LPs.
+- **Negative rebase without sync: the last LP out takes the whole loss.** After a -10% rebase with two equal LPs, the pool holds 180 but owes 200. The first LP to exit gets a full 100, and the second one's withdrawal then reverts, because it needs 100 from a pool holding 80.
+- **With sync, LPs share it pro rata.** Calling `sync()` right after the rebase gives the +10% to the LP, and splits the -10% so each LP gets about 90.
 
-- **`skim()` gets a positive rebase out, but to the wrong person.** The surplus goes to whoever calls `skim` first, not to the LPs whose share it grew. After a negative rebase `skim` just skips the short side; it can't cover a shortfall.
-
-The usual fix is to hold the wrapped, non-rebasing version instead (wstETH rather than stETH).
+The catch is that the pool doesn't call `sync()` itself. Between a negative rebase and the next sync, an LP who sees it coming can exit first at the old reserves and leave the loss to everyone else. The safer option is still to hold the wrapped, non-rebasing version (wstETH rather than stETH).
 
 **Freezable tokens put the pool under the issuer's control.** USDC and USDT can blocklist an address at the token contract. If the pool's own address were blocklisted, its balance of that token would be stuck, and nothing in the pool's code can get it out. LPs in a pool with a freezable token are trusting the issuer on top of the contract.
 

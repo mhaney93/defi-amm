@@ -31,6 +31,7 @@ contract SimpleAMM is ERC20, ReentrancyGuardTransient {
     /// @dev amountIn is what the pool received, which is less than what was sent for a fee-on-transfer token.
     event Swap(address indexed trader, address indexed tokenIn, uint256 amountIn, uint256 amountOut);
     event Skim(address indexed caller, address indexed to, uint256 amount0, uint256 amount1);
+    event Sync(uint256 reserve0, uint256 reserve1);
 
     /// @notice Swap fee is 0.3%, expressed as 997/1000 of the input going into the curve.
     uint256 public constant FEE_NUMERATOR = 997;
@@ -232,6 +233,17 @@ contract SimpleAMM is ERC20, ReentrancyGuardTransient {
         if (amount1 > 0) token1.safeTransfer(to, amount1);
 
         emit Skim(msg.sender, to, amount0, amount1);
+    }
+
+    /// @notice Set the reserves to the pool's actual balances.
+    /// @dev The opposite of skim: instead of sending the difference out, the pool books it. After a
+    ///      positive rebase the surplus becomes part of every LP's share; after a negative rebase the
+    ///      shortfall is split across all LPs pro rata instead of landing on the last one out.
+    ///      It goes through _updateReserves like any trade, so the oracle folds in the old price first and
+    ///      a price set by donate-and-sync only enters the TWAP for as long as it lasts on chain.
+    function sync() external nonReentrant {
+        _updateReserves(token0.balanceOf(address(this)), token1.balanceOf(address(this)));
+        emit Sync(reserve0, reserve1);
     }
 
     /// @notice Quote how much comes out for a given input, after the 0.3% fee.
