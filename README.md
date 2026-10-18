@@ -21,6 +21,7 @@ AMMs are the base layer of DeFi: most DEXs, lending liquidations and on-chain pr
 - **Checks-effects-interactions.** Reserves and shares update before any token transfer, and transfers use `SafeERC20`.
 - **`skim(to)` recovers stray tokens.** Tokens sent straight to the pool never enter the reserves, so no LP can withdraw them. `skim` sends anything above the reserves to `to` and leaves the reserves alone. A side with nothing extra is skipped, so it never sends 0. Tests: `test/SimpleAMM.skim.t.sol`.
 - **`sync()` books them instead.** It sets the reserves to the real balances, so tokens sent to the pool (or a rebase) become part of every LP's share. It updates the oracle the same way a trade does. Tests: `test/SimpleAMM.sync.t.sol`.
+- **The invariant tests donate too.** The fuzzer's handler can send tokens straight to the pool, then `sync` or `skim` at random. So the invariant is `reserve <= balance` (the pool never books more than it holds), not `==`. Two more invariants check that right after `sync()` the reserves equal the balances, and that `skim()` leaves the reserves unchanged and the balances back at the reserves.
 - **TWAP price oracle.** The pool keeps Uniswap V2-style running sums of price × seconds, so other contracts can read a time-weighted average price. See [Price oracle](#price-oracle).
 
 ## Roadmap
@@ -45,7 +46,7 @@ Requires [Foundry](https://getfoundry.sh/).
 git clone --recurse-submodules https://github.com/mhaney93/defi-amm.git
 cd defi-amm
 forge build
-forge test   # 106 tests (Foundry 1.8+ runs each suite's 5 invariants as one campaign, so it prints 98); add -vv for call counts
+forge test   # 110 tests (Foundry 1.8+ runs each suite's 7 invariants as one campaign, so it prints 98); add -vv for call counts
 ```
 
 Deploy two test tokens plus a seeded pool (uses an encrypted keystore, so no private key in `.env`):
@@ -98,7 +99,7 @@ The fix is balance-delta accounting, as in Uniswap V2: `addLiquidity` and `swap`
 
 The fee-on-transfer tests now assert that reserves equal balances after deposits, swaps in both directions and a full exit, including a fuzz test over random amounts.
 
-The invariant suite also runs against a fee token. `test/invariant/SimpleAMM.feeOnTransfer.invariant.t.sol` reuses the same handler and all 5 invariants, with token0 swapped for a token that burns 1% per transfer, so random sequences of adds, removes and swaps by several actors have to keep reserves equal to balances. Run against the pre-fix contract (`85d4c6e`), `reservesMatchBalances` fails on the first deposit (1000 booked, 990 held); against the current contract all 5 pass over 256 runs × 500 calls.
+The invariant suite also runs against a fee token. `test/invariant/SimpleAMM.feeOnTransfer.invariant.t.sol` reuses the same handler and all 7 invariants, with token0 swapped for a token that burns 1% per transfer, so random sequences of adds, removes, swaps, donations, syncs and skims by several actors must never book more than the pool holds. Run against the pre-fix contract (`85d4c6e`), the reserves-vs-balances invariant (then `reservesMatchBalances`, now `reservesNeverExceedBalances`) fails on the first deposit (1000 booked, 990 held); against the current contract all 7 pass over 256 runs × 500 calls.
 
 ## Tokens that return false
 

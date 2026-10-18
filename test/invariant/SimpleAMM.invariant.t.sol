@@ -8,7 +8,8 @@ import {IMintableERC20} from "../mocks/IMintableERC20.sol";
 import {SimpleAMMHandler} from "./SimpleAMMHandler.sol";
 
 /// @notice Stateful invariant tests. Foundry calls random sequences of handler functions
-///         (add, remove, swap by different actors) and checks every invariant after each call.
+///         (add, remove, swap, donate, sync, skim by different actors) and checks every invariant
+///         after each call.
 contract SimpleAMMInvariantTest is Test {
     SimpleAMM amm;
     IMintableERC20 token0;
@@ -41,10 +42,23 @@ contract SimpleAMMInvariantTest is Test {
         targetContract(address(handler));
     }
 
-    /// @notice The stored reserves are exactly what the pool holds. Nothing is lost or created.
-    function invariant_reservesMatchBalances() public view {
-        assertEq(amm.reserve0(), token0.balanceOf(address(amm)));
-        assertEq(amm.reserve1(), token1.balanceOf(address(amm)));
+    /// @notice The pool always holds at least what it has booked, so every LP share is fully backed.
+    /// @dev Not == because anyone can send tokens straight to the pool (the handler's donate), and
+    ///      those sit above the reserves until a sync or skim. Booking more than arrived would break this.
+    function invariant_reservesNeverExceedBalances() public view {
+        assertLe(amm.reserve0(), token0.balanceOf(address(amm)));
+        assertLe(amm.reserve1(), token1.balanceOf(address(amm)));
+    }
+
+    /// @notice Right after sync(), the reserves equal the balances again.
+    function invariant_syncRestoresEquality() public view {
+        assertFalse(handler.syncLeftGap());
+    }
+
+    /// @notice skim() never moves the reserves, and right after it the balances equal the reserves.
+    function invariant_skimLeavesReservesUnchanged() public view {
+        assertFalse(handler.skimChangedReserves());
+        assertFalse(handler.skimLeftGap());
     }
 
     /// @notice k never goes down on a swap, because the fee stays in the pool.
@@ -52,7 +66,8 @@ contract SimpleAMMInvariantTest is Test {
         assertFalse(handler.kDecreasedOnSwap());
     }
 
-    /// @notice Pool value per LP share never goes down across any mix of adds, removes and swaps.
+    /// @notice Pool value per LP share never goes down across any mix of adds, removes, swaps,
+    ///         donations, syncs and skims.
     ///         This is the "k never decreases" property, adjusted for liquidity moving in and out.
     function invariant_kPerShareNeverDecreases() public view {
         assertFalse(handler.kPerShareDecreased());
@@ -74,5 +89,8 @@ contract SimpleAMMInvariantTest is Test {
         emit log_named_uint("adds", handler.adds());
         emit log_named_uint("removes", handler.removes());
         emit log_named_uint("swaps", handler.swaps());
+        emit log_named_uint("donations", handler.donations());
+        emit log_named_uint("syncs", handler.syncs());
+        emit log_named_uint("skims", handler.skims());
     }
 }
