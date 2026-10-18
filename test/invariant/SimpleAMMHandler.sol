@@ -27,10 +27,21 @@ contract SimpleAMMHandler is Test {
     uint256 public lastKPerShare;
     bool public kPerShareDecreased;
     bool public kDecreasedOnSwap;
+    bool public syncLeftGap;
+    bool public skimChangedReserves;
+    bool public skimLeftGap;
+
+    /// @notice Tokens that arrived by donation since the last sync or skim, measured as the
+    ///         pool's balance change so a fee-on-transfer token counts only what landed.
+    uint256 public donated0;
+    uint256 public donated1;
 
     uint256 public swaps;
     uint256 public adds;
     uint256 public removes;
+    uint256 public donations;
+    uint256 public syncs;
+    uint256 public skims;
 
     constructor(SimpleAMM _amm, IMintableERC20 _token0, IMintableERC20 _token1) {
         amm = _amm;
@@ -109,5 +120,55 @@ contract SimpleAMMHandler is Test {
             if (amm.reserve0() * amm.reserve1() < kBefore) kDecreasedOnSwap = true;
         } catch {}
         _checkKPerShare();
+    }
+
+    /// @notice Send tokens straight to the pool, with no pool call. The reserves don't see them,
+    ///         so from here on the balance can sit above the reserve until someone syncs or skims.
+    function donate(uint256 actorSeed, bool donate0, uint256 amount) external {
+        address actor = _actor(actorSeed);
+        amount = bound(amount, 1, MAX_AMOUNT);
+        IMintableERC20 token = donate0 ? token0 : token1;
+        token.mint(actor, amount);
+
+        uint256 balanceBefore = token.balanceOf(address(amm));
+        vm.prank(actor);
+        token.transfer(address(amm), amount);
+        uint256 received = token.balanceOf(address(amm)) - balanceBefore;
+        if (donate0) donated0 += received;
+        else donated1 += received;
+        donations++;
+        _checkKPerShare();
+    }
+
+    /// @notice Book any donated tokens into the reserves. Right after, reserves must equal balances.
+    function sync(uint256 actorSeed) external {
+        vm.prank(_actor(actorSeed));
+        amm.sync();
+        syncs++;
+        donated0 = 0;
+        donated1 = 0;
+        if (!_reservesMatchBalances()) syncLeftGap = true;
+        _checkKPerShare();
+    }
+
+    /// @notice Send any donated tokens out to an actor. The reserves must not move, and the
+    ///         balances must come back down to exactly the reserves.
+    function skim(uint256 actorSeed) external {
+        address actor = _actor(actorSeed);
+        uint256 reserve0Before = amm.reserve0();
+        uint256 reserve1Before = amm.reserve1();
+
+        vm.prank(actor);
+        amm.skim(actor);
+        skims++;
+        donated0 = 0;
+        donated1 = 0;
+        if (amm.reserve0() != reserve0Before || amm.reserve1() != reserve1Before) skimChangedReserves = true;
+        if (!_reservesMatchBalances()) skimLeftGap = true;
+        _checkKPerShare();
+    }
+
+    function _reservesMatchBalances() internal view returns (bool) {
+        return amm.reserve0() == token0.balanceOf(address(amm)) && amm.reserve1() == token1.balanceOf(address(amm));
     }
 }
