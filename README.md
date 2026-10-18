@@ -12,7 +12,7 @@ AMMs are the base layer of DeFi: most DEXs, lending liquidations and on-chain pr
 
 - **The pool is the LP token.** `SimpleAMM` inherits OpenZeppelin's `ERC20`, so shares are minted and burned directly by the pool.
 - **First deposit sets the price.** The first LP receives `sqrt(amount0 * amount1)` shares (the geometric mean), which keeps the share value independent of the pair's price.
-- **Inflation-attack guard.** The first 1,000 shares (`MINIMUM_LIQUIDITY`) are minted to `0x…dEaD` and locked forever, so the total supply can never drop back to zero and the first depositor can't manipulate the share price.
+- **Inflation-attack guard.** The first 1,000 shares (`MINIMUM_LIQUIDITY`) are minted to `0x…dEaD` and locked forever, so the total supply can never drop back to zero and the first depositor can't manipulate the share price. `test/SimpleAMM.inflation.t.sol` runs the attack: seed the pool with dust for one share, donate 10,000 of each token and `sync()`, so one share is worth about 10 tokens. A 1,000-token deposit then rounds down and loses under 1 token, but the locked shares keep over 99% of the donation, so the attacker loses more than 9,900. A deposit worth less than one share reverts instead of minting 0, and a fuzz test checks that the attacker never gets back what they put in.
 - **Ratio-matched deposits.** Later deposits pull only the amounts that match the current reserve ratio, so the caller is never charged for excess tokens.
 - **Rounding favors the pool.** New shares are `min(amount0 * supply / reserve0, amount1 * supply / reserve1)`.
 - **Swaps with a 0.3% fee.** `swap` sells an exact input for the other token. The fee stays in the pool, so `k` grows with every trade and LPs earn it pro rata.
@@ -46,7 +46,7 @@ Requires [Foundry](https://getfoundry.sh/).
 git clone --recurse-submodules https://github.com/mhaney93/defi-amm.git
 cd defi-amm
 forge build
-forge test   # 112 tests (Foundry 1.8+ runs each suite's 8 invariants as one campaign, so it prints 98); add -vv for call counts
+forge test   # 115 tests (Foundry 1.8+ runs each suite's 8 invariants as one campaign, so it prints 101); add -vv for call counts
 ```
 
 Deploy two test tokens plus a seeded pool (uses an encrypted keystore, so no private key in `.env`):
