@@ -50,6 +50,14 @@ contract SimpleAMMInvariantTest is Test {
         assertLe(amm.reserve1(), token1.balanceOf(address(amm)));
     }
 
+    /// @notice The pool books exactly what it holds, apart from tokens donated since the last
+    ///         sync or skim. Catches a pool that books less than it receives (or more than it
+    ///         sends), which the <= check above would let through as skimmable surplus.
+    function invariant_reservesPlusDonationsEqualBalances() public view {
+        assertEq(amm.reserve0() + handler.donated0(), token0.balanceOf(address(amm)));
+        assertEq(amm.reserve1() + handler.donated1(), token1.balanceOf(address(amm)));
+    }
+
     /// @notice Right after sync(), the reserves equal the balances again.
     function invariant_syncRestoresEquality() public view {
         assertFalse(handler.syncLeftGap());

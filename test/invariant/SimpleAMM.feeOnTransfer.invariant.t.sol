@@ -6,7 +6,7 @@ import {FeeOnTransferToken} from "../mocks/FeeOnTransferToken.sol";
 import {IMintableERC20} from "../mocks/IMintableERC20.sol";
 import {SimpleAMMInvariantTest} from "./SimpleAMM.invariant.t.sol";
 
-/// @notice The same 7 invariants and the same handler, but token0 burns 1% on every transfer.
+/// @notice The same 8 invariants and the same handler, but token0 burns 1% on every transfer.
 ///         The unit tests check fee-on-transfer behavior on hand-picked paths; this runs random
 ///         sequences of adds, removes, swaps in both directions, donations, syncs and skims
 ///         by several actors.

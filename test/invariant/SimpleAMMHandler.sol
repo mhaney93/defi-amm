@@ -31,6 +31,11 @@ contract SimpleAMMHandler is Test {
     bool public skimChangedReserves;
     bool public skimLeftGap;
 
+    /// @notice Tokens that arrived by donation since the last sync or skim, measured as the
+    ///         pool's balance change so a fee-on-transfer token counts only what landed.
+    uint256 public donated0;
+    uint256 public donated1;
+
     uint256 public swaps;
     uint256 public adds;
     uint256 public removes;
@@ -125,8 +130,12 @@ contract SimpleAMMHandler is Test {
         IMintableERC20 token = donate0 ? token0 : token1;
         token.mint(actor, amount);
 
+        uint256 balanceBefore = token.balanceOf(address(amm));
         vm.prank(actor);
         token.transfer(address(amm), amount);
+        uint256 received = token.balanceOf(address(amm)) - balanceBefore;
+        if (donate0) donated0 += received;
+        else donated1 += received;
         donations++;
         _checkKPerShare();
     }
@@ -136,6 +145,8 @@ contract SimpleAMMHandler is Test {
         vm.prank(_actor(actorSeed));
         amm.sync();
         syncs++;
+        donated0 = 0;
+        donated1 = 0;
         if (!_reservesMatchBalances()) syncLeftGap = true;
         _checkKPerShare();
     }
@@ -150,6 +161,8 @@ contract SimpleAMMHandler is Test {
         vm.prank(actor);
         amm.skim(actor);
         skims++;
+        donated0 = 0;
+        donated1 = 0;
         if (amm.reserve0() != reserve0Before || amm.reserve1() != reserve1Before) skimChangedReserves = true;
         if (!_reservesMatchBalances()) skimLeftGap = true;
         _checkKPerShare();
