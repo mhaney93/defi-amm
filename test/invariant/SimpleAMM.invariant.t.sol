@@ -16,12 +16,17 @@ contract SimpleAMMInvariantTest is Test {
     IMintableERC20 token1;
     SimpleAMMHandler handler;
 
-    /// @dev Overridden by the fee-on-transfer suite to swap in a token that takes a cut.
+    /// @dev Overridden by the fee-on-transfer and rebasing suites to swap in an unusual token0.
     function _deployTokens() internal virtual returns (IMintableERC20, IMintableERC20) {
         return (
             IMintableERC20(address(new MockERC20("Token A", "TKA"))),
             IMintableERC20(address(new MockERC20("Token B", "TKB")))
         );
+    }
+
+    /// @dev Overridden by the rebasing suite to add a rebase action.
+    function _deployHandler() internal virtual returns (SimpleAMMHandler) {
+        return new SimpleAMMHandler(amm, token0, token1);
     }
 
     function setUp() public {
@@ -38,14 +43,14 @@ contract SimpleAMMInvariantTest is Test {
         amm.addLiquidity(1_000e18, 4_000e18, 0, 0);
         vm.stopPrank();
 
-        handler = new SimpleAMMHandler(amm, token0, token1);
+        handler = _deployHandler();
         targetContract(address(handler));
     }
 
     /// @notice The pool always holds at least what it has booked, so every LP share is fully backed.
     /// @dev Not == because anyone can send tokens straight to the pool (the handler's donate), and
     ///      those sit above the reserves until a sync or skim. Booking more than arrived would break this.
-    function invariant_reservesNeverExceedBalances() public view {
+    function invariant_reservesNeverExceedBalances() public view virtual {
         assertLe(amm.reserve0(), token0.balanceOf(address(amm)));
         assertLe(amm.reserve1(), token1.balanceOf(address(amm)));
     }
@@ -53,7 +58,7 @@ contract SimpleAMMInvariantTest is Test {
     /// @notice The pool books exactly what it holds, apart from tokens donated since the last
     ///         sync or skim. Catches a pool that books less than it receives (or more than it
     ///         sends), which the <= check above would let through as skimmable surplus.
-    function invariant_reservesPlusDonationsEqualBalances() public view {
+    function invariant_reservesPlusDonationsEqualBalances() public view virtual {
         assertEq(amm.reserve0() + handler.donated0(), token0.balanceOf(address(amm)));
         assertEq(amm.reserve1() + handler.donated1(), token1.balanceOf(address(amm)));
     }
@@ -93,7 +98,7 @@ contract SimpleAMMInvariantTest is Test {
     }
 
     /// @dev Printed with -vv so you can see the fuzzer actually exercised every path.
-    function afterInvariant() external {
+    function afterInvariant() public virtual {
         emit log_named_uint("adds", handler.adds());
         emit log_named_uint("removes", handler.removes());
         emit log_named_uint("swaps", handler.swaps());
