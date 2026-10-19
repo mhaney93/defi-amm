@@ -1,0 +1,47 @@
+{
+  "extraKnownMarketplaces": {
+    "trailofbits": {
+      "source": {
+        "source": "settings",
+        "name": "trailofbits",
+        "plugins": [
+          {
+            "name": "building-secure-contracts",
+            "description": "Trail of Bits smart contract vulnerability scanners and development guideline assistants",
+            "source": {
+              "source": "git-subdir",
+              "url": "https://github.com/trailofbits/skills.git",
+              "path": "plugins/building-secure-contracts",
+              "sha": "5c99c03fb8a9ea568432ecbcba5d86e9f4ac2bf0"
+            }
+          },
+          {
+            "name": "property-based-testing",
+            "description": "Trail of Bits guidance for property-based tests, including Echidna and Medusa invariants",
+            "source": {
+              "source": "git-subdir",
+              "url": "https://github.com/trailofbits/skills.git",
+              "path": "plugins/property-based-testing",
+              "sha": "5c99c03fb8a9ea568432ecbcba5d86e9f4ac2bf0"
+            }
+          },
+          {
+            "name": "dimensional-analysis",
+            "description": "Trail of Bits audit for unit and decimal-scaling bugs",
+            "source": {
+              "source": "git-subdir",
+              "url": "https://github.com/trailofbits/skills.git",
+              "path": "plugins/dimensional-analysis",
+              "sha": "5c99c03fb8a9ea568432ecbcba5d86e9f4ac2bf0"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "enabledPlugins": {
+    "building-secure-contracts@trailofbits": true,
+    "property-based-testing@trailofbits": true,
+    "dimensional-analysis@trailofbits": true
+  }
+}
