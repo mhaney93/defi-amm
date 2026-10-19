@@ -11,8 +11,9 @@ import {IMintableERC20} from "../mocks/IMintableERC20.sol";
 ///         few actors. That keeps runs from being wasted on calls that can only revert.
 /// @dev After every call the handler checks that k per LP share did not go down, and
 ///      records a failure in a ghost flag that the invariant test asserts on.
-///      Tokens are typed as IMintableERC20 so the same handler drives both the plain-token
-///      suite and the fee-on-transfer suite.
+///      Tokens are typed as IMintableERC20 so the same handler drives the plain-token,
+///      fee-on-transfer and rebasing suites. The rebasing suite extends it, so the actions it
+///      needs to wrap are public virtual.
 contract SimpleAMMHandler is Test {
     SimpleAMM public immutable amm;
     IMintableERC20 public immutable token0;
@@ -94,7 +95,7 @@ contract SimpleAMMHandler is Test {
         _checkKPerShare();
     }
 
-    function removeLiquidity(uint256 actorSeed, uint256 liquidity) external {
+    function removeLiquidity(uint256 actorSeed, uint256 liquidity) public virtual {
         address actor = _actor(actorSeed);
         uint256 balance = amm.balanceOf(actor);
         if (balance == 0) return;
@@ -107,7 +108,7 @@ contract SimpleAMMHandler is Test {
         _checkKPerShare();
     }
 
-    function swap(uint256 actorSeed, bool zeroForOne, uint256 amountIn) external {
+    function swap(uint256 actorSeed, bool zeroForOne, uint256 amountIn) public virtual {
         address actor = _actor(actorSeed);
         amountIn = bound(amountIn, 1, MAX_AMOUNT);
         IMintableERC20 tokenIn = zeroForOne ? token0 : token1;
@@ -124,7 +125,7 @@ contract SimpleAMMHandler is Test {
 
     /// @notice Send tokens straight to the pool, with no pool call. The reserves don't see them,
     ///         so from here on the balance can sit above the reserve until someone syncs or skims.
-    function donate(uint256 actorSeed, bool donate0, uint256 amount) external {
+    function donate(uint256 actorSeed, bool donate0, uint256 amount) public virtual {
         address actor = _actor(actorSeed);
         amount = bound(amount, 1, MAX_AMOUNT);
         IMintableERC20 token = donate0 ? token0 : token1;
@@ -141,7 +142,7 @@ contract SimpleAMMHandler is Test {
     }
 
     /// @notice Book any donated tokens into the reserves. Right after, reserves must equal balances.
-    function sync(uint256 actorSeed) external {
+    function sync(uint256 actorSeed) public virtual {
         vm.prank(_actor(actorSeed));
         amm.sync();
         syncs++;
@@ -153,7 +154,7 @@ contract SimpleAMMHandler is Test {
 
     /// @notice Send any donated tokens out to an actor. The reserves must not move, and the
     ///         balances must come back down to exactly the reserves.
-    function skim(uint256 actorSeed) external {
+    function skim(uint256 actorSeed) public virtual {
         address actor = _actor(actorSeed);
         uint256 reserve0Before = amm.reserve0();
         uint256 reserve1Before = amm.reserve1();
@@ -168,7 +169,7 @@ contract SimpleAMMHandler is Test {
         _checkKPerShare();
     }
 
-    function _reservesMatchBalances() internal view returns (bool) {
+    function _reservesMatchBalances() internal view virtual returns (bool) {
         return amm.reserve0() == token0.balanceOf(address(amm)) && amm.reserve1() == token1.balanceOf(address(amm));
     }
 }

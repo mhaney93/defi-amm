@@ -46,7 +46,7 @@ Requires [Foundry](https://getfoundry.sh/).
 git clone --recurse-submodules https://github.com/mhaney93/defi-amm.git
 cd defi-amm
 forge build
-forge test   # 115 tests (Foundry 1.8+ runs each suite's 8 invariants as one campaign, so it prints 101); add -vv for call counts
+forge test   # 124 tests (Foundry 1.8+ runs each invariant suite (8, 8 and 9 invariants) as one campaign, so it prints 102); add -vv for call counts
 ```
 
 Deploy two test tokens plus a seeded pool (uses an encrypted keystore, so no private key in `.env`):
@@ -150,6 +150,8 @@ Balance-delta accounting added a fourth: **`incorrect-equality`** on six `== 0` 
 - **Positive rebase without sync: the extra is stranded.** After a +10% rebase the pool holds 110 but still prices trades on 100. When the only LP exits she gets her share of the 100, and a later deposit doesn't pick up the other 10 either, because the pool books only what arrives. `skim()` can get it out, but to whoever calls it first, not to the LPs.
 - **Negative rebase without sync: the last LP out takes the whole loss.** After a -10% rebase with two equal LPs, the pool holds 180 but owes 200. The first LP to exit gets a full 100, and the second one's withdrawal then reverts, because it needs 100 from a pool holding 80.
 - **With sync, LPs share it pro rata.** Calling `sync()` right after the rebase gives the +10% to the LP, and splits the -10% so each LP gets about 90.
+
+The invariant suite runs with a rebasing token too. `test/invariant/SimpleAMM.rebasing.invariant.t.sol` gives the handler a `rebase` action (anywhere from -50% to +100%) on top of the usual adds, removes, swaps, donations, syncs and skims. A negative rebase breaks `reserve <= balance` on purpose, so the handler tracks the shortfall separately as `deficit0`, and the balance invariants become `reserve <= balance + deficit` and `reserve + donated == balance + deficit`. Rebases also allow one exception to "k per share never decreases": when `sync()` books a loss, k per share is allowed to fall, but only by the fraction of token0 the rebase took. A ninth invariant checks the token's rounding: each transfer out of the pool can leave at most 2 wei behind (the token moves whole shares and rounds down), and never less than the pool booked. All 9 pass over 256 runs × 500 calls. Removing the k-per-share allowance or the deficit tracking makes them fail.
 
 The catch is that the pool doesn't call `sync()` itself. Between a negative rebase and the next sync, an LP who sees it coming can exit first at the old reserves and leave the loss to everyone else. The safer option is still to hold the wrapped, non-rebasing version (wstETH rather than stETH).
 
