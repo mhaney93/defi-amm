@@ -8,7 +8,7 @@ import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/Reentrancy
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {ReentrantToken} from "./mocks/ReentrantToken.sol";
 
-/// @notice Unit tests for the constructor, liquidity, swap and getAmountOut.
+/// @notice Unit tests for the constructor, liquidity, swap, getAmountOut and getAmountIn.
 ///         Fuzz tests live in SimpleAMM.fuzz.t.sol, invariants in test/invariant/.
 contract SimpleAMMTest is Test {
     event LiquidityAdded(address indexed provider, uint256 amount0, uint256 amount1, uint256 liquidity);
@@ -238,6 +238,44 @@ contract SimpleAMMTest is Test {
     function test_getAmountOut_revertsOnEmptyReserve() public {
         vm.expectRevert(SimpleAMM.InsufficientLiquidity.selector);
         amm.getAmountOut(10, 0, 1000);
+    }
+
+    // ---------------------------------------------------------------- getAmountIn
+
+    function test_getAmountIn_knownValues() public view {
+        // 1000 * 9 * 1000 / ((1000 - 9) * 997) = 9.10..., rounds up to 10. getAmountOut(10) is 9 and getAmountOut(9) is 8.
+        assertEq(amm.getAmountIn(9, 1000, 1000), 10);
+        // 997 * 1 * 1000 / ((2 - 1) * 997) = 1000 exactly. Uniswap V2's floor + 1 would charge 1001.
+        assertEq(amm.getAmountIn(1, 997, 2), 1000);
+        assertEq(amm.getAmountOut(1000, 997, 2), 1);
+        assertEq(amm.getAmountOut(999, 997, 2), 0);
+    }
+
+    function test_getAmountIn_revertsOnZeroAmount() public {
+        vm.expectRevert(SimpleAMM.ZeroAmount.selector);
+        amm.getAmountIn(0, 1000, 1000);
+    }
+
+    function test_getAmountIn_revertsOnEmptyReserve() public {
+        vm.expectRevert(SimpleAMM.InsufficientLiquidity.selector);
+        amm.getAmountIn(10, 0, 1000);
+    }
+
+    function test_getAmountIn_revertsWhenAskingForWholeReserve() public {
+        // The curve never gives up the last unit of a reserve, at any price.
+        vm.expectRevert(SimpleAMM.InsufficientLiquidity.selector);
+        amm.getAmountIn(1000, 1000, 1000);
+    }
+
+    function test_swap_withGetAmountIn_buysExactOutput() public {
+        _seed();
+        uint256 wanted = 0.5e18;
+        uint256 amountIn = amm.getAmountIn(wanted, 1e18, 4e18);
+
+        // Quote the input, then pass the wanted output as minAmountOut: the swap fills at the quote.
+        vm.prank(bob);
+        uint256 amountOut = amm.swap(address(token0), amountIn, wanted);
+        assertGe(amountOut, wanted);
     }
 
     // ---------------------------------------------------------------- swap

@@ -16,6 +16,7 @@ AMMs are the base layer of DeFi: most DEXs, lending liquidations and on-chain pr
 - **Ratio-matched deposits.** Later deposits pull only the amounts that match the current reserve ratio, so the caller is never charged for excess tokens.
 - **Rounding favors the pool.** New shares are `min(amount0 * supply / reserve0, amount1 * supply / reserve1)`.
 - **Swaps with a 0.3% fee.** `swap` sells an exact input for the other token. The fee stays in the pool, so `k` grows with every trade and LPs earn it pro rata.
+- **Quotes both ways.** `getAmountOut` prices an exact input. `getAmountIn` answers the reverse question, the smallest input that buys at least a given output, so a caller can quote it and pass the wanted amount as `swap`'s `minAmountOut`. It rounds up with `Math.mulDiv`, so the quote always fills and one wei less never does (a fuzz test checks both). Uniswap V2 rounds down and adds 1 instead, which overpays by 1 wei when the division is exact.
 - **Slippage limits.** `addLiquidity` and `removeLiquidity` take min amounts for each token, and `swap` takes `minAmountOut`. If the price moves before the tx lands, it reverts instead of filling at a worse rate.
 - **Reentrancy guard.** Every state-changing function is `nonReentrant`, using OpenZeppelin's `ReentrancyGuardTransient` (the lock lives in EIP-1153 transient storage, so it's cheap and clears itself after each tx).
 - **Checks-effects-interactions.** Reserves and shares update before any token transfer, and transfers use `SafeERC20`.
@@ -46,7 +47,7 @@ Requires [Foundry](https://getfoundry.sh/).
 git clone --recurse-submodules https://github.com/mhaney93/defi-amm.git
 cd defi-amm
 forge build
-forge test   # 124 tests (Foundry 1.8+ runs each invariant suite (8, 8 and 9 invariants) as one campaign, so it prints 102); add -vv for call counts
+forge test   # 130 tests (Foundry 1.8+ runs each invariant suite (8, 8 and 9 invariants) as one campaign, so it prints 108); add -vv for call counts
 ```
 
 Deploy two test tokens plus a seeded pool (uses an encrypted keystore, so no private key in `.env`):
@@ -61,13 +62,13 @@ forge script script/DeploySimpleAMM.s.sol --rpc-url $SEPOLIA_RPC_URL \
 
 ## Gas
 
-Measured with `forge test --gas-report` on the unit tests (Foundry v1.8.4). Costs include the ERC20 transfers. Runtime size: 10,743 bytes (the EIP-170 limit is 24,576).
+Measured with `forge test --gas-report` on the unit tests (Foundry v1.8.4). Costs include the ERC20 transfers. Runtime size: 11,219 bytes (the EIP-170 limit is 24,576).
 
 | Function | Median | Max | Notes |
 |---|---|---|---|
-| `addLiquidity` | 249,924 | 252,267 | Highest on the first deposit, which writes fresh storage and locks `MINIMUM_LIQUIDITY` |
-| `swap` | 72,860 | 78,689 | |
-| `removeLiquidity` | 58,100 | 84,432 | |
+| `addLiquidity` | 249,902 | 252,245 | Highest on the first deposit, which writes fresh storage and locks `MINIMUM_LIQUIDITY` |
+| `swap` | 78,607 | 78,703 | |
+| `removeLiquidity` | 58,112 | 84,455 | |
 
 Each token pulled in costs two extra `balanceOf` calls, because the pool measures its balance before and after the transfer (see Fee-on-transfer tokens below).
 

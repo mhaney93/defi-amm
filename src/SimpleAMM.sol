@@ -262,6 +262,28 @@ contract SimpleAMM is ERC20, ReentrancyGuardTransient {
         amountOut = (amountInWithFee * reserveOut) / (reserveIn * FEE_DENOMINATOR + amountInWithFee);
     }
 
+    /// @notice Quote the smallest input that buys at least `amountOut`, after the 0.3% fee.
+    /// @dev The inverse of getAmountOut: amountIn = reserveIn * amountOut * 1000 / ((reserveOut - amountOut) * 997).
+    ///      It rounds up, so swap(tokenIn, amountIn, amountOut) always fills, and one wei less would not.
+    ///      Uniswap V2 adds 1 after rounding down instead, which overpays by 1 wei when the division is exact.
+    ///      mulDiv keeps the full 512-bit product, so the quote doesn't overflow before the division.
+    /// @param amountOut Amount of the output token the caller wants.
+    /// @param reserveIn Reserve of the token being sold.
+    /// @param reserveOut Reserve of the token being bought; must be more than amountOut.
+    /// @return amountIn Amount of the input token the pool needs to receive.
+    function getAmountIn(uint256 amountOut, uint256 reserveIn, uint256 reserveOut)
+        public
+        pure
+        returns (uint256 amountIn)
+    {
+        if (amountOut == 0) revert ZeroAmount();
+        if (reserveIn == 0 || amountOut >= reserveOut) revert InsufficientLiquidity();
+
+        amountIn = Math.mulDiv(
+            reserveIn * FEE_DENOMINATOR, amountOut, (reserveOut - amountOut) * FEE_NUMERATOR, Math.Rounding.Ceil
+        );
+    }
+
     /// @notice The cumulative prices as of this block, including the seconds since the last update.
     /// @dev Lets an oracle take a reading without sending a transaction to the pool first.
     ///      Each second adds the price as it stood at the start of the current block, so a trade

@@ -73,6 +73,26 @@ contract SimpleAMMFuzzTest is Test {
         );
     }
 
+    // ---------------------------------------------------------------- getAmountIn
+
+    /// @notice getAmountIn quotes the exact minimum: it buys at least amountOut, and one wei less doesn't.
+    function testFuzz_getAmountIn_isTheSmallestInputThatFills(uint256 amountOut, uint256 reserveIn, uint256 reserveOut)
+        public
+        view
+    {
+        reserveIn = bound(reserveIn, 1, MAX);
+        reserveOut = bound(reserveOut, 2, MAX);
+        amountOut = bound(amountOut, 1, reserveOut - 1);
+
+        uint256 amountIn = amm.getAmountIn(amountOut, reserveIn, reserveOut);
+        // Asking for nearly the whole reserve can quote an input so large that getAmountOut's
+        // amountIn * 997 * reserveOut overflows. Up to 1e40 it fits, since reserveOut <= 1e30.
+        vm.assume(amountIn <= 1e40);
+
+        assertGe(amm.getAmountOut(amountIn, reserveIn, reserveOut), amountOut);
+        if (amountIn > 1) assertLt(amm.getAmountOut(amountIn - 1, reserveIn, reserveOut), amountOut);
+    }
+
     // ---------------------------------------------------------------- swap
 
     /// @notice The fee stays in the pool, so k can only go up after a swap.
