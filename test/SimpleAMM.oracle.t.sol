@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, stdStorage, StdStorage} from "forge-std/Test.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {SimpleAMM} from "../src/SimpleAMM.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
@@ -9,6 +9,8 @@ import {MockERC20} from "./mocks/MockERC20.sol";
 /// @notice Tests for the TWAP price accumulators: what gets added, when, and why a
 ///         same-block price spike can't move the average.
 contract SimpleAMMOracleTest is Test {
+    using stdStorage for StdStorage;
+
     uint256 constant Q112 = 2 ** 112;
 
     SimpleAMM amm;
@@ -51,6 +53,11 @@ contract SimpleAMMOracleTest is Test {
     function _swap0For1(uint256 amountIn) internal {
         vm.prank(bob);
         amm.swap(address(token0), amountIn, 0);
+    }
+
+    /// @dev Overwrites price0CumulativeLast, so a test can start the sum just below 2**256.
+    function _setPrice0Cumulative(uint256 value) internal {
+        stdstore.target(address(amm)).sig("price0CumulativeLast()").checked_write(value);
     }
 
     // ---------------------------------------------------------------- accumulation
@@ -139,6 +146,31 @@ contract SimpleAMMOracleTest is Test {
         assertApproxEqRel(oneSecondLater / 3601, 4 * Q112, 0.001e18); // within 0.1%
     }
 
+    /// @notice The running sum is allowed to wrap past 2**256. Start it 5 seconds' worth of price
+    ///         below the limit, so the trade at 10s wraps it: the end reading is smaller than the
+    ///         start, so a checked subtraction would revert, but an unchecked one still gives the
+    ///         same 40s TWAP as test_twap_weightsEachPriceByDuration.
+    function test_twap_survivesAccumulatorOverflow() public {
+        _seed();
+        uint256 start = block.timestamp;
+        _setPrice0Cumulative(type(uint256).max - 4 * Q112 * 5);
+        (uint256 cumulativeStart,) = amm.currentCumulativePrices();
+
+        vm.warp(start + 10);
+        _swap0For1(0.5e18);
+        uint256 priceAfter = _price0();
+        assertLt(amm.price0CumulativeLast(), cumulativeStart); // the trade wrapped the stored sum
+
+        vm.warp(start + 40);
+        (uint256 cumulativeEnd,) = amm.currentCumulativePrices();
+
+        uint256 twap;
+        unchecked {
+            twap = (cumulativeEnd - cumulativeStart) / 40;
+        }
+        assertEq(twap, (4 * Q112 * 10 + priceAfter * 30) / 40);
+    }
+
     // ---------------------------------------------------------------- fuzz
 
     /// @notice For any pool and any gap, the view adds spot price * seconds, and the next
@@ -166,5 +198,29 @@ contract SimpleAMMOracleTest is Test {
         _swap0For1(amountIn);
         assertEq(amm.price0CumulativeLast(), view0);
         assertEq(amm.price1CumulativeLast(), view1);
+    }
+
+    /// @notice Wherever the sum starts, wrapped or not, the TWAP read with unchecked
+    ///         subtraction is the same. Starting points within 40 seconds' worth of price of
+    ///         2**256 make the sum wrap during the trade or during the view's 30s afterwards.
+    function testFuzz_twap_independentOfWhereTheSumStarts(uint256 headroom) public {
+        _seed();
+        uint256 start = block.timestamp;
+        headroom = bound(headroom, 0, 4 * Q112 * 40);
+        _setPrice0Cumulative(type(uint256).max - headroom);
+        (uint256 cumulativeStart,) = amm.currentCumulativePrices();
+
+        vm.warp(start + 10);
+        _swap0For1(0.5e18);
+        uint256 priceAfter = _price0();
+
+        vm.warp(start + 40);
+        (uint256 cumulativeEnd,) = amm.currentCumulativePrices();
+
+        uint256 twap;
+        unchecked {
+            twap = (cumulativeEnd - cumulativeStart) / 40;
+        }
+        assertEq(twap, (4 * Q112 * 10 + priceAfter * 30) / 40);
     }
 }
