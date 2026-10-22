@@ -47,7 +47,7 @@ Requires [Foundry](https://getfoundry.sh/).
 git clone --recurse-submodules https://github.com/mhaney93/defi-amm.git
 cd defi-amm
 forge build
-forge test   # 130 tests (Foundry 1.8+ runs each invariant suite (8, 8 and 9 invariants) as one campaign, so it prints 108); add -vv for call counts
+forge test   # 132 tests (Foundry 1.8+ runs each invariant suite (8, 8 and 9 invariants) as one campaign, so it prints 110); add -vv for call counts
 ```
 
 Deploy two test tokens plus a seeded pool (uses an encrypted keystore, so no private key in `.env`):
@@ -83,7 +83,7 @@ Spot price is easy to manipulate: one large swap moves it, and a lending protoco
 - **Running sums.** `price0CumulativeLast` adds up `(reserve1 / reserve0) × seconds`, and `price1CumulativeLast` does the same for the inverse price. Prices are fixed point with 112 fractional bits (Uniswap V2's UQ112x112).
 - **Updated once per block, before reserves change.** The first trade in a block adds the price that held since the last update; later trades in the same block add nothing. A swap followed by a swap back in the same block therefore can't move the average at all.
 - **Reading a TWAP.** Take two readings of `currentCumulativePrices()` some time apart: `TWAP = (cumulativeEnd - cumulativeStart) / (timeEnd - timeStart)`. The view includes the seconds since the last trade, so no transaction to the pool is needed.
-- **Overflow.** The sums are allowed to wrap, as in Uniswap V2; the difference between two readings is still correct if the reader subtracts in an `unchecked` block.
+- **Overflow.** The sums are allowed to wrap, as in Uniswap V2; the difference between two readings is still correct if the reader subtracts in an `unchecked` block. Two tests check this: one starts the sum 5 seconds' worth of price below 2^256, so the next trade wraps it, and the TWAP read across the wrap matches the one in the plain test exactly; a fuzz test does the same from any starting point within 40 seconds of wrapping. They also show why the pool must add in `unchecked`: with checked math, the trade that wraps the sum reverts, and so would every trade after it.
 
 The oracle tests (`test/SimpleAMM.oracle.t.sol`) include one that dumps 10× the pool's reserve in a single swap: the spot price drops by more than 98%, but an hour-long TWAP ending in that block doesn't change, and one second later it has moved by less than 0.1%.
 
