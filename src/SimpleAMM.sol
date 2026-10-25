@@ -250,6 +250,10 @@ contract SimpleAMM is ERC20, ReentrancyGuardTransient {
     /// @dev From (reserveIn + amountInWithFee) * (reserveOut - amountOut) = reserveIn * reserveOut:
     ///      amountOut = amountInWithFee * reserveOut / (reserveIn + amountInWithFee).
     ///      Integer division rounds down, so the trader never gets more than the curve allows.
+    /// @param amountIn Amount of the input token the pool receives.
+    /// @param reserveIn Reserve of the token being sold.
+    /// @param reserveOut Reserve of the token being bought.
+    /// @return amountOut Amount of the output token the trade pays out; always less than reserveOut.
     function getAmountOut(uint256 amountIn, uint256 reserveIn, uint256 reserveOut)
         public
         pure
@@ -290,6 +294,8 @@ contract SimpleAMM is ERC20, ReentrancyGuardTransient {
     ///      only moves the average for as long as its price actually lasts on chain.
     ///      Math.mulDiv reverts if a price is above 2**144, which would need a reserve ratio
     ///      far beyond any real pair (Uniswap V2 rules it out by capping reserves at uint112).
+    /// @return price0Cumulative price0CumulativeLast plus (token1 per token0 price) * seconds since the last update.
+    /// @return price1Cumulative price1CumulativeLast plus (token0 per token1 price) * seconds since the last update.
     function currentCumulativePrices() public view returns (uint256 price0Cumulative, uint256 price1Cumulative) {
         price0Cumulative = price0CumulativeLast;
         price1Cumulative = price1CumulativeLast;
