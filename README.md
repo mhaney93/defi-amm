@@ -16,7 +16,7 @@ AMMs are the base layer of DeFi: most DEXs, lending liquidations and on-chain pr
 - **Ratio-matched deposits.** Later deposits pull only the amounts that match the current reserve ratio, so the caller is never charged for excess tokens.
 - **Rounding favors the pool.** New shares are `min(amount0 * supply / reserve0, amount1 * supply / reserve1)`.
 - **Swaps with a 0.3% fee.** `swap` sells an exact input for the other token. The fee stays in the pool, so `k` grows with every trade and LPs earn it pro rata.
-- **Quotes both ways.** `getAmountOut` prices an exact input. `getAmountIn` answers the reverse question, the smallest input that buys at least a given output, so a caller can quote it and pass the wanted amount as `swap`'s `minAmountOut`. It rounds up with `Math.mulDiv`, so the quote always fills and one wei less never does (a fuzz test checks both). Uniswap V2 rounds down and adds 1 instead, which overpays by 1 wei when the division is exact.
+- **Quotes both ways.** `getAmountOut` prices an exact input. `getAmountIn` answers the reverse question, the smallest input that buys at least a given output, so a caller can quote it and pass the wanted amount as `swap`'s `minAmountOut`. It rounds up with `Math.mulDiv`, so the quote always fills and one wei less never does (a fuzz test checks both, and another runs the quote through a real `swap` in either direction: it fills with `minAmountOut` set to the wanted amount, and one wei less reverts). Uniswap V2 rounds down and adds 1 instead, which overpays by 1 wei when the division is exact.
 - **Slippage limits.** `addLiquidity` and `removeLiquidity` take min amounts for each token, and `swap` takes `minAmountOut`. If the price moves before the tx lands, it reverts instead of filling at a worse rate.
 - **Reentrancy guard.** Every state-changing function is `nonReentrant`, using OpenZeppelin's `ReentrancyGuardTransient` (the lock lives in EIP-1153 transient storage, so it's cheap and clears itself after each tx).
 - **Checks-effects-interactions.** Reserves and shares update before any token transfer, and transfers use `SafeERC20`.
@@ -47,7 +47,7 @@ Requires [Foundry](https://getfoundry.sh/).
 git clone --recurse-submodules https://github.com/mhaney93/defi-amm.git
 cd defi-amm
 forge build
-forge test   # 132 tests (Foundry 1.8+ runs each invariant suite (8, 8 and 9 invariants) as one campaign, so it prints 110); add -vv for call counts
+forge test   # 133 tests (Foundry 1.8+ runs each invariant suite (8, 8 and 9 invariants) as one campaign, so it prints 111); add -vv for call counts
 ```
 
 Deploy two test tokens plus a seeded pool (uses an encrypted keystore, so no private key in `.env`):
