@@ -93,6 +93,35 @@ contract SimpleAMMFuzzTest is Test {
         if (amountIn > 1) assertLt(amm.getAmountOut(amountIn - 1, reserveIn, reserveOut), amountOut);
     }
 
+    /// @notice End to end on a live pool, in either direction: swapping the quoted input with
+    ///         minAmountOut = amountOut fills, and the same swap with one wei less reverts.
+    function testFuzz_getAmountIn_quoteFillsRealSwap(uint256 r0, uint256 r1, uint256 amountOut, bool zeroForOne)
+        public
+    {
+        (r0, r1) = _boundReserves(r0, r1);
+        _seed(r0, r1);
+
+        MockERC20 tokenIn = zeroForOne ? token0 : token1;
+        uint256 reserveIn = zeroForOne ? r0 : r1;
+        uint256 reserveOut = zeroForOne ? r1 : r0;
+        amountOut = bound(amountOut, 1, reserveOut - 1);
+
+        uint256 amountIn = amm.getAmountIn(amountOut, reserveIn, reserveOut);
+        // Same overflow bound as the pure test above: the swap prices the input with getAmountOut.
+        vm.assume(amountIn <= 1e40);
+        tokenIn.mint(bob, amountIn);
+
+        vm.startPrank(bob);
+        if (amountIn > 1) {
+            vm.expectRevert(SimpleAMM.InsufficientOutputAmount.selector);
+            amm.swap(address(tokenIn), amountIn - 1, amountOut);
+        }
+        uint256 received = amm.swap(address(tokenIn), amountIn, amountOut);
+        vm.stopPrank();
+
+        assertGe(received, amountOut);
+    }
+
     // ---------------------------------------------------------------- swap
 
     /// @notice The fee stays in the pool, so k can only go up after a swap.
